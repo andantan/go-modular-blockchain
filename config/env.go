@@ -38,3 +38,14 @@ func GetIntEnvVar(key string) int {
 
 	return intValue
 }
+
+func GetFloatEnvVar(key string) float64 {
+	stringValue := GetEnvVar(key)
+	floatValue, err := strconv.ParseFloat(stringValue, 64)
+
+	if err != nil {
+		log.Fatalf("Environment variable \"%s\" (\"%s\") is not a valid float. Application will exit. Error: %v", key, stringValue, err)
+	}
+
+	return floatValue
+}

@@ -4,11 +4,14 @@ else
 	CLEAR_COMMAND = @clear
 endif
 
-test-race:
-	@go test ./... --race
-
 test:
 	@go test ./...
+
+test-verbose:
+	@go test -v ./...
+
+test-race:
+	@go test ./... --race
 
 build:
 	@go build -o ./bin/blockchain-node
