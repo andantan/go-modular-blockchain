@@ -2,54 +2,77 @@ package core
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"encoding/gob"
+	"fmt"
+	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/types"
 	"io"
 )
 
 type Block struct {
-	Header
+	*Header
 	Transactions []Transaction
+	Validator    crypto.PublicKey
+	Signature    *crypto.Signature
 
-	hash types.Hash
+	BlockHash types.Hash
 }
 
-func (b *Block) Hash() types.Hash {
+func NewBlock(h *Header, txx []Transaction) *Block {
+	return &Block{
+		Header:       h,
+		Transactions: txx,
+	}
+}
+
+func (b *Block) Sign(privKey crypto.PrivateKey) error {
+	sig, err := privKey.Sign(b.Bytes())
+
+	if err != nil {
+		return err
+	}
+
+	b.Validator = privKey.PublicKey()
+	b.Signature = sig
+
+	return nil
+}
+
+func (b *Block) Verify() error {
+	if b.Signature == nil {
+		return fmt.Errorf("block has no signature")
+	}
+
+	if !b.Signature.Verify(b.Validator, b.Bytes()) {
+		return fmt.Errorf("invalid block signature")
+	}
+
+	return nil
+}
+
+// Hash Returns Hash of Block.Header
+func (b *Block) Hash(hasher Hasher[*Block]) types.Hash {
+	if b.BlockHash.IsZero() {
+		b.BlockHash = hasher.Hash(b)
+	}
+
+	return b.BlockHash
+}
+
+func (b *Block) Decode(r io.Reader, dec Decoder[*Block]) error {
+	return dec.Decode(r, b)
+}
+
+func (b *Block) Encode(w io.Writer, enc Encoder[*Block]) error {
+	return enc.Encode(w, b)
+}
+
+// Bytes Returns byte slice of Block.Header
+func (b *Block) Bytes() []byte {
 	buf := &bytes.Buffer{}
+	enc := gob.NewEncoder(buf)
 
-	_ = b.Header.EncodeBinary(buf)
+	_ = enc.Encode(b.Header)
 
-	if b.hash.IsZero() {
-		b.hash = sha256.Sum256(buf.Bytes())
-	}
-
-	return b.hash
-}
-
-func (b *Block) EncodeBinary(w io.Writer) error {
-	if err := b.Header.EncodeBinary(w); err != nil {
-		return err
-	}
-
-	for _, tx := range b.Transactions {
-		if err := tx.EncodeBinary(w); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (b *Block) DecodeBinary(r io.Reader) error {
-	if err := b.Header.DecodeBinary(r); err != nil {
-		return err
-	}
-
-	for _, tx := range b.Transactions {
-		if err := tx.DecodeBinary(r); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return buf.Bytes()
 }

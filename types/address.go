@@ -19,7 +19,7 @@ func (a Address) ToSlice() []byte {
 	return b
 }
 
-func (a Address) ToString() string {
+func (a Address) String() string {
 	return hex.EncodeToString(a.ToSlice())
 }
 

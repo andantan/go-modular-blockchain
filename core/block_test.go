@@ -1,65 +1,63 @@
 package core
 
 import (
-	"bytes"
+	"github.com/andantan/go-modular-blockchain/crypto"
+	"github.com/andantan/go-modular-blockchain/random"
 	"github.com/andantan/go-modular-blockchain/types"
 	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
 )
 
-func TestHeader_Encode_Decode(t *testing.T) {
-	h := &Header{
-		Version:   1,
-		PrevBlock: types.RandomHash(),
-		Timestamp: uint64(time.Now().UnixNano()),
-		Height:    10,
-		Nonce:     983994,
+func randomBlock(height uint32) *Block {
+	header := &Header{
+		Version:       1,
+		PrevBlockHash: types.RandomHash(),
+		Height:        height,
+		Timestamp:     uint64(time.Now().UnixNano()),
 	}
 
-	buf := &bytes.Buffer{}
-	assert.Nil(t, h.EncodeBinary(buf))
+	txx := make([]Transaction, 100)
 
-	hDecode := &Header{}
-	assert.Nil(t, hDecode.DecodeBinary(buf))
+	for i := 0; i < 100; i++ {
+		txx = append(txx, Transaction{
+			Data: random.GenerateRandomBytes(128),
+		})
+	}
 
-	assert.Equal(t, h, hDecode)
+	return NewBlock(header, txx)
 }
 
-func TestBlock_Encode_Decode(t *testing.T) {
-	b := &Block{
-		Header: Header{
-			Version:   1,
-			PrevBlock: types.RandomHash(),
-			Timestamp: uint64(time.Now().UnixNano()),
-			Height:    10,
-			Nonce:     983994,
-		},
-		Transactions: nil,
-	}
+func TestBlock_Sign(t *testing.T) {
+	privKey := crypto.GeneratePrivateKey()
 
-	buf := &bytes.Buffer{}
-	assert.Nil(t, b.EncodeBinary(buf))
+	b := randomBlock(0)
 
-	bDecode := &Block{}
-	assert.Nil(t, bDecode.DecodeBinary(buf))
-
-	assert.Equal(t, b, bDecode)
+	assert.Nil(t, b.Sign(privKey))
+	assert.NotNil(t, b.Signature)
 }
 
-func TestBlock_Hash(t *testing.T) {
-	b := &Block{
-		Header: Header{
-			Version:   1,
-			PrevBlock: types.RandomHash(),
-			Timestamp: uint64(time.Now().UnixNano()),
-			Height:    10,
-			Nonce:     983994,
-		},
-		Transactions: []Transaction{},
-	}
+func TestBlock_Verify_Valid(t *testing.T) {
+	privKey := crypto.GeneratePrivateKey()
 
-	h := b.Hash()
+	b := randomBlock(0)
 
-	assert.False(t, h.IsZero())
+	assert.NotNil(t, b.Verify())
+	assert.Nil(t, b.Sign(privKey))
+	assert.Nil(t, b.Verify())
+}
+
+func TestBlock_Verify_Invalid(t *testing.T) {
+	privKey := crypto.GeneratePrivateKey()
+
+	b := randomBlock(0)
+	assert.Nil(t, b.Sign(privKey))
+
+	temperingPrivkey := crypto.GeneratePrivateKey()
+	b.Validator = temperingPrivkey.PublicKey()
+
+	assert.NotNil(t, b.Verify())
+
+	b.Height = 100
+	assert.NotNil(t, b.Verify())
 }
