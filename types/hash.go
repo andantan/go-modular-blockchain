@@ -1,9 +1,9 @@
 package types
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/andantan/go-modular-blockchain/random"
 )
 
 const (
@@ -28,9 +28,9 @@ func (h Hash) String() string {
 	return hex.EncodeToString(h.ToSlice())
 }
 
-func HashFromBytes(b []byte) Hash {
+func MustHashFromBytes(b []byte) Hash {
 	if len(b) != HashLength {
-		msg := fmt.Sprintf("given bytes with length %d should be 32 bytes", len(b))
+		msg := fmt.Sprintf("given bytes with hash-length %d should be 32 bytes", len(b))
 		panic(msg)
 	}
 
@@ -41,13 +41,6 @@ func HashFromBytes(b []byte) Hash {
 	return h
 }
 
-func RandomBytes(size int) []byte {
-	token := make([]byte, size)
-	_, _ = rand.Read(token)
-
-	return token
-}
-
 func RandomHash() Hash {
-	return HashFromBytes(RandomBytes(HashLength))
+	return MustHashFromBytes(random.GenerateRandomBytes(HashLength))
 }
