@@ -2,6 +2,7 @@ package core
 
 import (
 	"github.com/andantan/go-modular-blockchain/crypto"
+	"github.com/andantan/go-modular-blockchain/random"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -38,7 +39,21 @@ func TestTransaction_Verify_InValid(t *testing.T) {
 	assert.Nil(t, tx.Sign(privKey))
 
 	temperingPrivKey := crypto.GeneratePrivateKey()
-	tx.PublicKey = temperingPrivKey.PublicKey()
+	tx.From = temperingPrivKey.PublicKey()
 
 	assert.NotNil(t, tx.Verify())
+}
+
+func randomTxWithSignature(t *testing.T) *Transaction {
+	privKey := crypto.GeneratePrivateKey()
+
+	tx := &Transaction{
+		Data: random.GenerateRandomBytes(128),
+	}
+
+	assert.Nil(t, tx.Sign(privKey))
+	assert.NotNil(t, tx.From)
+	assert.NotNil(t, tx.Signature)
+
+	return tx
 }
