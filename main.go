@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/andantan/go-modular-blockchain/config"
+	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/network"
 	"time"
 )
@@ -32,8 +33,11 @@ func main() {
 		}
 	}()
 
+	privKey := crypto.GeneratePrivateKey()
+
 	opts := network.ServerOpts{
 		Transports: []network.Transport{trLocal},
+		PrivateKey: &privKey,
 	}
 
 	s := network.NewServer(opts)

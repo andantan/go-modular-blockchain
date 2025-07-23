@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/random"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +43,18 @@ func TestTransaction_Verify_InValid(t *testing.T) {
 	tx.From = temperingPrivKey.PublicKey()
 
 	assert.NotNil(t, tx.Verify())
+}
+
+func TestTransaction_Encode_Decode(t *testing.T) {
+	tx := randomTxWithSignature(t)
+	buf := &bytes.Buffer{}
+
+	assert.Nil(t, tx.Encode(NewGobTxEncoder(buf)))
+
+	txDecoded := new(Transaction)
+
+	assert.Nil(t, txDecoded.Decode(NewGobTxDecoder(buf)))
+	assert.Equal(t, tx, txDecoded)
 }
 
 func randomTxWithSignature(t *testing.T) *Transaction {

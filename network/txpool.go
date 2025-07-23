@@ -15,6 +15,12 @@ func NewTxPool() *TxPool {
 	}
 }
 
+func (p *TxPool) Transactions() []*core.Transaction {
+	s := NewTxMapSorter(p.transactions)
+
+	return s.transactions
+}
+
 func (p *TxPool) Add(tx *core.Transaction) error {
 	hash := tx.Hash(core.TxHasher{})
 	p.transactions[hash] = tx

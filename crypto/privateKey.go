@@ -17,12 +17,14 @@ func GeneratePrivateKey() PrivateKey {
 		panic(err)
 	}
 
-	return PrivateKey{key: k}
+	return PrivateKey{
+		key: k,
+	}
 }
 
 func (pk PrivateKey) PublicKey() PublicKey {
 	return PublicKey{
-		key: &pk.key.PublicKey,
+		Key: elliptic.MarshalCompressed(pk.key.PublicKey, pk.key.X, pk.key.Y),
 	}
 }
 
@@ -34,7 +36,7 @@ func (pk PrivateKey) Sign(data []byte) (*Signature, error) {
 	}
 
 	return &Signature{
-		r: r,
-		s: s,
+		R: r,
+		S: s,
 	}, nil
 }

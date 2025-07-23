@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/sirupsen/logrus"
@@ -25,6 +26,20 @@ type Server struct {
 }
 
 func NewServer(opts ServerOpts) *Server {
+	if opts.BlockTime == time.Duration(0) {
+		timerUnit := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_UNIT")
+		timerDuration := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_DURATION")
+		timer := timerUnit * timerDuration
+
+		logrus.WithFields(logrus.Fields{
+			"unit":     timerUnit,
+			"duration": timerDuration,
+			"timer":    timer,
+		}).Info("set default block time")
+
+		opts.BlockTime = time.Duration(timer)
+	}
+
 	return &Server{
 		ServerOpts:  opts,
 		blockTime:   opts.BlockTime,
