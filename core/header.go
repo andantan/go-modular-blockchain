@@ -8,7 +8,7 @@ import (
 
 type Header struct {
 	Version       uint32
-	MerkleRoot    types.Hash
+	DataHash      types.Hash
 	PrevBlockHash types.Hash
 	Timestamp     uint64
 	Height        uint32

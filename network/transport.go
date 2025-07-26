@@ -1,8 +1,9 @@
 package network
 
 type Transport interface {
-	Consume() <-chan Message
+	Consume() <-chan RPC
 	Connect(Transport) error
 	SendMessage(NetAddr, []byte) error
+	Broadcast([]byte) error
 	Addr() NetAddr
 }

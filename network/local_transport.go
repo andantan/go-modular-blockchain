@@ -1,13 +1,14 @@
 package network
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 )
 
 type LocalTransport struct {
 	addr      NetAddr
-	consumeCh chan Message
+	consumeCh chan RPC
 	lock      sync.Mutex
 	peers     map[NetAddr]*LocalTransport
 }
@@ -15,12 +16,12 @@ type LocalTransport struct {
 func NewLocalTransport(addr NetAddr) Transport {
 	return &LocalTransport{
 		addr:      addr,
-		consumeCh: make(chan Message, 1024),
+		consumeCh: make(chan RPC, 1024),
 		peers:     make(map[NetAddr]*LocalTransport),
 	}
 }
 
-func (t *LocalTransport) Consume() <-chan Message {
+func (t *LocalTransport) Consume() <-chan RPC {
 	return t.consumeCh
 }
 
@@ -43,9 +44,19 @@ func (t *LocalTransport) SendMessage(to NetAddr, payload []byte) error {
 		return fmt.Errorf("%s: could not send message to %s", t.addr, to)
 	}
 
-	peer.consumeCh <- Message{
+	peer.consumeCh <- RPC{
 		From:    t.addr,
-		Payload: payload,
+		Payload: bytes.NewReader(payload),
+	}
+
+	return nil
+}
+
+func (t *LocalTransport) Broadcast(payload []byte) error {
+	for _, peer := range t.peers {
+		if err := t.SendMessage(peer.Addr(), payload); err != nil {
+			return err
+		}
 	}
 
 	return nil

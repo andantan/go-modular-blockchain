@@ -24,7 +24,7 @@ func GeneratePrivateKey() PrivateKey {
 
 func (pk PrivateKey) PublicKey() PublicKey {
 	return PublicKey{
-		Key: elliptic.MarshalCompressed(pk.key.PublicKey, pk.key.X, pk.key.Y),
+		Key: elliptic.MarshalCompressed(pk.key.PublicKey, pk.key.PublicKey.X, pk.key.PublicKey.Y),
 	}
 }
 

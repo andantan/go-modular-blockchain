@@ -5,7 +5,6 @@ import (
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/random"
 	"github.com/stretchr/testify/assert"
-	"math/rand"
 	"testing"
 	"time"
 )
@@ -38,7 +37,7 @@ func TestTxPool_Sort(t *testing.T) {
 
 	for i := 0; i < txLen; i++ {
 		tx := core.NewTransaction(random.GenerateRandomBytes(64))
-		tx.SetFirstSeen(uint64(i * rand.Intn(1000000)))
+		tx.SetFirstSeen(uint64(time.Now().UnixNano()))
 		time.Sleep(time.Nanosecond)
 
 		assert.Nil(t, p.Add(tx))

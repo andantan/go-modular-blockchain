@@ -1,7 +1,7 @@
 package network
 
 import (
-	"fmt"
+	"bytes"
 	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
@@ -10,28 +10,30 @@ import (
 )
 
 type ServerOpts struct {
-	Transports []Transport
-	BlockTime  time.Duration
-	PrivateKey *crypto.PrivateKey
+	RPCDecodeFunc RPCDecodeFunc
+	RPCProcesor   RPCProcesor
+	Transports    []Transport
+	BlockTime     time.Duration
+	PrivateKey    *crypto.PrivateKey
 }
 
 type Server struct {
 	ServerOpts
 
-	blockTime   time.Duration
 	memPool     *TxPool
+	chain       *core.Blockchain
 	isValidator bool
-	messageCh   chan Message
+	rpcCh       chan RPC
 	quitCh      chan struct{}
 }
 
-func NewServer(opts ServerOpts) *Server {
+func NewServer(opts ServerOpts) (*Server, error) {
 	if opts.BlockTime == time.Duration(0) {
 		timerUnit := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_UNIT")
 		timerDuration := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_DURATION")
 		timer := timerUnit * timerDuration
 
-		logrus.WithFields(logrus.Fields{
+		config.GetDefaultLogger().WithFields(logrus.Fields{
 			"unit":     timerUnit,
 			"duration": timerDuration,
 			"timer":    timer,
@@ -40,72 +42,168 @@ func NewServer(opts ServerOpts) *Server {
 		opts.BlockTime = time.Duration(timer)
 	}
 
-	return &Server{
+	if opts.RPCDecodeFunc == nil {
+		opts.RPCDecodeFunc = DefaultRPCDecodeFunc
+	}
+
+	chain, err := core.NewBlockchain(core.GetGenesisBlock())
+
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Server{
 		ServerOpts:  opts,
-		blockTime:   opts.BlockTime,
 		memPool:     NewTxPool(),
+		chain:       chain,
 		isValidator: opts.PrivateKey != nil,
-		messageCh:   make(chan Message),
+		rpcCh:       make(chan RPC),
 		quitCh:      make(chan struct{}, 1),
 	}
+
+	if s.RPCProcesor == nil {
+		s.RPCProcesor = s
+	}
+
+	if s.isValidator {
+		go s.validatorLoop()
+	}
+
+	return s, nil
 }
 
 func (s *Server) Start() {
+	logger := config.GetDefaultLogger()
 	s.initTransports()
-
-	ticker := time.NewTicker(s.blockTime)
 
 free:
 	for {
 		select {
-		case msg := <-s.messageCh:
-			fmt.Printf("%+v\n", msg)
+		case rpc := <-s.rpcCh:
+			msg, err := s.RPCDecodeFunc(rpc)
+
+			if err != nil {
+				logger.Error(err)
+			}
+
+			if err := s.RPCProcesor.ProcessMessage(msg); err != nil {
+				logger.Error(err)
+			}
 		case <-s.quitCh:
 			break free
-		case <-ticker.C:
-			if s.isValidator {
-				_ = s.createNewBlock()
-			}
 		}
 	}
 
-	fmt.Println("Server shutdown")
+	logger.Info("server is shutting down")
 }
 
-func (s *Server) handleTransaction(tx *core.Transaction) error {
-	if err := tx.Verify(); err != nil {
-		return err
+func (s *Server) validatorLoop() {
+	logger := config.GetDefaultLogger()
+	ticker := time.NewTicker(s.BlockTime)
+
+	logger.WithFields(logrus.Fields{
+		"blockTime": s.BlockTime,
+	}).Info("starting validator loop")
+
+	for {
+		<-ticker.C
+
+		if err := s.createNewBlock(); err != nil {
+			logger.Error(err)
+		}
+	}
+}
+
+func (s *Server) ProcessMessage(msg *DecodedMessage) error {
+	switch t := msg.Data.(type) {
+	case *core.Transaction:
+		return s.processTransaction(t)
 	}
 
+	return nil
+}
+
+func (s *Server) broadcast(payload []byte) error {
+	for _, tr := range s.Transports {
+		if err := tr.Broadcast(payload); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) processTransaction(tx *core.Transaction) error {
+	logger := config.GetDefaultLogger()
 	hash := tx.Hash(core.TxHasher{})
 
 	if s.memPool.Has(hash) {
-		logrus.WithFields(logrus.Fields{
-			"hash": hash,
-		}).Info("transaction already in mempool")
 
 		return nil
 	}
 
-	logrus.WithFields(logrus.Fields{
-		"hash": hash,
+	if err := tx.Verify(); err != nil {
+		return err
+	}
+
+	tx.SetFirstSeen(uint64(time.Now().UnixNano()))
+
+	logger.WithFields(logrus.Fields{
+		"hash":           hash,
+		"mempool-length": s.memPool.Len(),
 	}).Info("adding new tx to the mempool")
+
+	go func() {
+		if err := s.broadcastTx(tx); err != nil {
+			logger.Error(err)
+		}
+	}()
 
 	return s.memPool.Add(tx)
 }
 
-func (s *Server) createNewBlock() error {
-	fmt.Println("creating a new block")
+func (s *Server) broadcastTx(tx *core.Transaction) error {
+	buf := &bytes.Buffer{}
 
-	return nil
+	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
+		return err
+	}
+
+	msg := NewMessage(MessageTypeTx, buf.Bytes())
+
+	return s.broadcast(msg.Bytes())
 }
 
 func (s *Server) initTransports() {
 	for _, tr := range s.Transports {
 		go func(tr Transport) {
 			for rpc := range tr.Consume() {
-				s.messageCh <- rpc
+				s.rpcCh <- rpc
 			}
 		}(tr)
 	}
+}
+
+func (s *Server) createNewBlock() error {
+	currentHeader, err := s.chain.GetHeader(s.chain.Height())
+
+	if err != nil {
+		return err
+	}
+
+	block, err := core.NewBlockFromPrevheader(currentHeader, nil)
+
+	if err != nil {
+		return err
+	}
+
+	if err := block.Sign(*s.PrivateKey); err != nil {
+		return err
+	}
+
+	if err := s.chain.AddBlock(block); err != nil {
+		return err
+	}
+
+	return nil
 }
