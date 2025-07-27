@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
-	"github.com/sirupsen/logrus"
 	"io"
 )
 
@@ -49,17 +47,17 @@ type DecodedMessage struct {
 type RPCDecodeFunc func(RPC) (*DecodedMessage, error)
 
 func DefaultRPCDecodeFunc(rpc RPC) (*DecodedMessage, error) {
-	logger := config.GetDefaultLogger()
+	// logger := config.GetNetworkLogger()
 	msg := Message{}
 
 	if err := gob.NewDecoder(rpc.Payload).Decode(&msg); err != nil {
 		return nil, fmt.Errorf("failed to decode message from %s: %s", rpc.From, err)
 	}
 
-	logger.WithFields(logrus.Fields{
-		"type": msg.Header,
-		"from": rpc.From,
-	}).Info("new incoming message")
+	//logger.WithFields(logrus.Fields{
+	//	"type": msg.Header,
+	//	"from": rpc.From,
+	//}).Info("new incoming message")
 
 	switch msg.Header {
 	case MessageTypeTx:

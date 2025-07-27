@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/network"
-	"github.com/sirupsen/logrus"
 	"math/rand"
 	"strconv"
 	"time"
@@ -14,36 +14,71 @@ import (
 
 func init() {
 	config.InitEnv()
-	config.InitLogger()
+	config.InitLogger(config.GetEnvVar("SERVER_NAME"))
 }
 
 func main() {
 	trLocal := network.NewLocalTransport("LOCAL")
-	trRemote := network.NewLocalTransport("REMOTE")
+	trRemoteA := network.NewLocalTransport("REMOTE_A")
+	trRemoteB := network.NewLocalTransport("REMOTE_B")
+	trRemoteC := network.NewLocalTransport("REMOTE_C")
 
-	if err := trLocal.Connect(trRemote); err != nil {
+	// prototype
+	if err := trLocal.Connect(trRemoteA); err != nil {
 		panic(err)
 	}
 
-	if err := trRemote.Connect(trLocal); err != nil {
+	if err := trRemoteA.Connect(trLocal); err != nil {
 		panic(err)
 	}
+
+	if err := trRemoteA.Connect(trRemoteB); err != nil {
+		panic(err)
+	}
+
+	if err := trRemoteB.Connect(trRemoteA); err != nil {
+		panic(err)
+	}
+
+	if err := trRemoteB.Connect(trRemoteC); err != nil {
+		panic(err)
+	}
+
+	if err := trRemoteC.Connect(trRemoteB); err != nil {
+		panic(err)
+	}
+
+	initRemoteServers([]network.Transport{trRemoteA, trRemoteB, trRemoteC})
 
 	go func() {
 		for {
-			if err := sendTransaction(trRemote, trLocal.Addr()); err != nil {
-				logrus.Error(err)
+			if err := sendTransaction(trRemoteA, trLocal.Addr()); err != nil {
+				config.GetDefaultLogger().Error(err)
 			}
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(2 * time.Second)
 		}
 	}()
 
 	privKey := crypto.GeneratePrivateKey()
+	localServer := makeServer("local", trLocal, &privKey)
+	localServer.Start()
+}
 
+func initRemoteServers(trs []network.Transport) {
+	for i, tr := range trs {
+		id := fmt.Sprintf("REMOTE_%d", i)
+		s := makeServer(id, tr, nil)
+
+		go s.Start()
+	}
+}
+
+func makeServer(ID string, tr network.Transport, pk *crypto.PrivateKey) *network.Server {
 	opts := network.ServerOpts{
-		Transports: []network.Transport{trLocal},
-		PrivateKey: &privKey,
+		ID:         ID,
+		Transports: []network.Transport{tr},
+		PrivateKey: pk,
 	}
 
 	s, err := network.NewServer(opts)
@@ -52,7 +87,7 @@ func main() {
 		config.GetDefaultLogger().Fatal(err)
 	}
 
-	s.Start()
+	return s
 }
 
 func sendTransaction(tr network.Transport, to network.NetAddr) error {

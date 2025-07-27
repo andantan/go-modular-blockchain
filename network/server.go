@@ -10,6 +10,7 @@ import (
 )
 
 type ServerOpts struct {
+	ID            string
 	RPCDecodeFunc RPCDecodeFunc
 	RPCProcesor   RPCProcesor
 	Transports    []Transport
@@ -32,12 +33,6 @@ func NewServer(opts ServerOpts) (*Server, error) {
 		timerUnit := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_UNIT")
 		timerDuration := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_DURATION")
 		timer := timerUnit * timerDuration
-
-		config.GetDefaultLogger().WithFields(logrus.Fields{
-			"unit":     timerUnit,
-			"duration": timerDuration,
-			"timer":    timer,
-		}).Info("set default block time")
 
 		opts.BlockTime = time.Duration(timer)
 	}
@@ -64,6 +59,12 @@ func NewServer(opts ServerOpts) (*Server, error) {
 	if s.RPCProcesor == nil {
 		s.RPCProcesor = s
 	}
+
+	config.GetServerLogger().WithFields(logrus.Fields{
+		"ID":          opts.ID,
+		"isValidator": s.isValidator,
+		"blockTime":   opts.BlockTime,
+	}).Info("new server created")
 
 	if s.isValidator {
 		go s.validatorLoop()
@@ -102,7 +103,7 @@ func (s *Server) validatorLoop() {
 	ticker := time.NewTicker(s.BlockTime)
 
 	logger.WithFields(logrus.Fields{
-		"blockTime": s.BlockTime,
+		"ID": s.ID,
 	}).Info("starting validator loop")
 
 	for {
@@ -123,6 +124,10 @@ func (s *Server) ProcessMessage(msg *DecodedMessage) error {
 	return nil
 }
 
+func (s *Server) broadcastBlock(b *core.Block) error {
+	return nil
+}
+
 func (s *Server) broadcast(payload []byte) error {
 	for _, tr := range s.Transports {
 		if err := tr.Broadcast(payload); err != nil {
@@ -134,11 +139,10 @@ func (s *Server) broadcast(payload []byte) error {
 }
 
 func (s *Server) processTransaction(tx *core.Transaction) error {
-	logger := config.GetDefaultLogger()
+	logger := config.GetServerLogger()
 	hash := tx.Hash(core.TxHasher{})
 
 	if s.memPool.Has(hash) {
-
 		return nil
 	}
 
@@ -149,9 +153,10 @@ func (s *Server) processTransaction(tx *core.Transaction) error {
 	tx.SetFirstSeen(uint64(time.Now().UnixNano()))
 
 	logger.WithFields(logrus.Fields{
-		"hash":           hash,
-		"mempool-length": s.memPool.Len(),
-	}).Info("adding new tx to the mempool")
+		"ID":            s.ID,
+		"hash":          hash,
+		"mempoolLength": s.memPool.Len() + 1,
+	}).Info("trying to add new tx to the mempool")
 
 	go func() {
 		if err := s.broadcastTx(tx); err != nil {
@@ -185,13 +190,15 @@ func (s *Server) initTransports() {
 }
 
 func (s *Server) createNewBlock() error {
-	currentHeader, err := s.chain.GetHeader(s.chain.Height())
+	prevHeader, err := s.chain.GetHeader(s.chain.Height())
 
 	if err != nil {
 		return err
 	}
 
-	block, err := core.NewBlockFromPrevheader(currentHeader, nil)
+	txx := s.memPool.Transactions()
+
+	block, err := core.NewBlockFromPrevheader(prevHeader, txx)
 
 	if err != nil {
 		return err
@@ -204,6 +211,8 @@ func (s *Server) createNewBlock() error {
 	if err := s.chain.AddBlock(block); err != nil {
 		return err
 	}
+
+	s.memPool.Flush()
 
 	return nil
 }

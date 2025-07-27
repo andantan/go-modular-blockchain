@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -72,8 +73,25 @@ func (f *CustomFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 	_, _ = fmt.Fprintf(b, " %s ", entry.Message)
 
-	for k, v := range entry.Data {
-		b.WriteString(" ")
+	// --- WithFields로 추가된 필드(key=value)에 색상 및 정렬 적용 ---
+	if len(entry.Data) > 0 { // 필드가 있을 때만 공백 추가
+		b.WriteString(" ") // 메시지와 필드 사이의 공백
+	}
+
+	keys := make([]string, 0, len(entry.Data))
+	for k := range entry.Data {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	for i, k := range keys {
+		v := entry.Data[k]
+
+		if i > 0 {
+			b.WriteString(" ")
+		}
+
 		b.WriteString(ColorGreen)
 		b.WriteString(fmt.Sprintf("%s", k))
 		b.WriteString(ColorReset)
@@ -85,7 +103,7 @@ func (f *CustomFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 			b.WriteString(fmt.Sprintf("%v", v))
 		}
 	}
-	b.WriteByte('\n')
+	b.WriteByte('\n') // 줄바꿈 추가
 
 	return b.Bytes(), nil
 }
@@ -96,15 +114,30 @@ var defaultLoggerOnce sync.Once
 var blockchainLogger *logrus.Logger
 var blockchainLoggerOnce sync.Once
 
-func InitLogger() {
+var networkLogger *logrus.Logger
+var networkLoggerOnce sync.Once
+
+var mempoolLogger *logrus.Logger
+var mempoolLoggerOnce sync.Once
+
+var serverLogger *logrus.Logger
+var serverLoggerOnce sync.Once
+
+func InitLogger(ID string) {
+	prefixId := fmt.Sprintf("[ID=%s] ", ID)
+
 	defaultLoggerOnce.Do(func() {
 		defaultLogger = &logrus.Logger{
 			Out:   os.Stderr,
 			Level: logrus.DebugLevel,
-			Formatter: &logrus.TextFormatter{
-				FullTimestamp:   true,
-				TimestampFormat: "2006-01-02 15:04:05",
-				ForceColors:     true,
+			Formatter: &CustomFormatter{
+				Prefix:      prefixId + "[DEFAULT]",
+				PrefixColor: ColorCyan,
+				TextFormatter: logrus.TextFormatter{
+					FullTimestamp:   true,
+					TimestampFormat: "2006-01-02 15:04:05",
+					ForceColors:     true,
+				},
 			},
 		}
 	})
@@ -114,7 +147,55 @@ func InitLogger() {
 			Out:   os.Stderr,
 			Level: logrus.DebugLevel,
 			Formatter: &CustomFormatter{
-				Prefix:      "[BLOCKCHAIN]",
+				Prefix:      prefixId + "[BLOCKCHAIN]",
+				PrefixColor: ColorCyan,
+				TextFormatter: logrus.TextFormatter{
+					FullTimestamp:   true,
+					TimestampFormat: "2006-01-02 15:04:05",
+					ForceColors:     true,
+				},
+			},
+		}
+	})
+
+	networkLoggerOnce.Do(func() {
+		networkLogger = &logrus.Logger{
+			Out:   os.Stderr,
+			Level: logrus.DebugLevel,
+			Formatter: &CustomFormatter{
+				Prefix:      prefixId + "[NETWORK]",
+				PrefixColor: ColorPurple,
+				TextFormatter: logrus.TextFormatter{
+					FullTimestamp:   true,
+					TimestampFormat: "2006-01-02 15:04:05",
+					ForceColors:     true,
+				},
+			},
+		}
+	})
+
+	mempoolLoggerOnce.Do(func() {
+		mempoolLogger = &logrus.Logger{
+			Out:   os.Stderr,
+			Level: logrus.DebugLevel,
+			Formatter: &CustomFormatter{
+				Prefix:      prefixId + "[MEMPOOL]",
+				PrefixColor: ColorCyan,
+				TextFormatter: logrus.TextFormatter{
+					FullTimestamp:   true,
+					TimestampFormat: "2006-01-02 15:04:05",
+					ForceColors:     true,
+				},
+			},
+		}
+	})
+
+	serverLoggerOnce.Do(func() {
+		serverLogger = &logrus.Logger{
+			Out:   os.Stderr,
+			Level: logrus.DebugLevel,
+			Formatter: &CustomFormatter{
+				Prefix:      prefixId + "[SERVER]",
 				PrefixColor: ColorCyan,
 				TextFormatter: logrus.TextFormatter{
 					FullTimestamp:   true,
@@ -132,4 +213,16 @@ func GetDefaultLogger() *logrus.Logger {
 
 func GetBlockchainLogger() *logrus.Logger {
 	return blockchainLogger
+}
+
+func GetNetworkLogger() *logrus.Logger {
+	return networkLogger
+}
+
+func GetMempoolLogger() *logrus.Logger {
+	return mempoolLogger
+}
+
+func GetServerLogger() *logrus.Logger {
+	return serverLogger
 }

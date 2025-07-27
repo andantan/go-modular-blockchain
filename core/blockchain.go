@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/sirupsen/logrus"
 	"sync"
 )
@@ -67,15 +68,17 @@ func (bc *Blockchain) Height() uint32 {
 }
 
 func (bc *Blockchain) addBlockWithoutValidation(block *Block) error {
-	logrus.WithFields(logrus.Fields{
-		"height":      block.Height,
-		"hash":        block.Hash(BlockHasher{}),
-		"length(txx)": len(block.Transactions),
-	}).Info("adding new block")
+	logger := config.GetBlockchainLogger()
 
 	bc.lock.Lock()
 	bc.headers = append(bc.headers, block.Header)
 	bc.lock.Unlock()
+
+	logger.WithFields(logrus.Fields{
+		"height":      block.Height,
+		"hash":        block.Hash(BlockHasher{}),
+		"length(txx)": len(block.Transactions),
+	}).Info("new block")
 
 	return bc.store.Put(block)
 }

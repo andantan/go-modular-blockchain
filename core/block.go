@@ -11,21 +11,21 @@ import (
 
 type Block struct {
 	*Header
-	Transactions []Transaction
+	Transactions []*Transaction
 	Validator    crypto.PublicKey
 	Signature    *crypto.Signature
 
 	BlockHash types.Hash
 }
 
-func NewBlock(h *Header, txx []Transaction) *Block {
+func NewBlock(h *Header, txx []*Transaction) *Block {
 	return &Block{
 		Header:       h,
 		Transactions: txx,
 	}
 }
 
-func NewBlockFromPrevheader(prevHeader *Header, currentTxx []Transaction) (*Block, error) {
+func NewBlockFromPrevheader(prevHeader *Header, currentTxx []*Transaction) (*Block, error) {
 	currentDataHash, err := CalculateDataHash(currentTxx)
 
 	if err != nil {
@@ -44,7 +44,7 @@ func NewBlockFromPrevheader(prevHeader *Header, currentTxx []Transaction) (*Bloc
 }
 
 func (b *Block) AddTransaction(tx *Transaction) {
-	b.Transactions = append(b.Transactions, *tx)
+	b.Transactions = append(b.Transactions, tx)
 }
 
 func (b *Block) Sign(privKey crypto.PrivateKey) error {
@@ -105,7 +105,7 @@ func (b *Block) Encode(enc Encoder[*Block]) error {
 	return enc.Encode(b)
 }
 
-func CalculateDataHash(txx []Transaction) (hash types.Hash, err error) {
+func CalculateDataHash(txx []*Transaction) (hash types.Hash, err error) {
 	buf := &bytes.Buffer{}
 
 	for _, tx := range txx {
@@ -123,7 +123,7 @@ func GetGenesisBlock() *Block {
 	header := &Header{
 		Version:       1,
 		DataHash:      types.Hash{},
-		Timestamp:     uint64(time.Now().UnixNano()),
+		Timestamp:     uint64(0),
 		Height:        uint32(0),
 		PrevBlockHash: types.Hash{},
 	}
