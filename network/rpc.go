@@ -11,8 +11,9 @@ import (
 type MessageType byte
 
 const (
-	MessageTypeTx MessageType = 1 << iota
-	MessageTypeBlock
+	MessageTypeTx        MessageType = 0x1
+	MessageTypeBlock     MessageType = 0x2
+	MessageTypeGetBlocks MessageType = 0x3
 )
 
 type RPC struct {
@@ -47,17 +48,11 @@ type DecodedMessage struct {
 type RPCDecodeFunc func(RPC) (*DecodedMessage, error)
 
 func DefaultRPCDecodeFunc(rpc RPC) (*DecodedMessage, error) {
-	// logger := config.GetNetworkLogger()
 	msg := Message{}
 
 	if err := gob.NewDecoder(rpc.Payload).Decode(&msg); err != nil {
 		return nil, fmt.Errorf("failed to decode message from %s: %s", rpc.From, err)
 	}
-
-	//logger.WithFields(logrus.Fields{
-	//	"type": msg.Header,
-	//	"from": rpc.From,
-	//}).Info("new incoming message")
 
 	switch msg.Header {
 	case MessageTypeTx:
@@ -72,7 +67,16 @@ func DefaultRPCDecodeFunc(rpc RPC) (*DecodedMessage, error) {
 			Data: tx,
 		}, nil
 	case MessageTypeBlock:
-		return nil, nil
+		block := new(core.Block)
+
+		if err := block.Decode(core.NewGobBlockDecoder(bytes.NewReader(msg.Data))); err != nil {
+			return nil, err
+		}
+
+		return &DecodedMessage{
+			From: rpc.From,
+			Data: block,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown message header: %x", msg.Header)
 	}

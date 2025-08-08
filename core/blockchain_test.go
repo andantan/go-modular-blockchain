@@ -1,6 +1,7 @@
 package core
 
 import (
+	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/types"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -18,13 +19,14 @@ func TestAddBlock(t *testing.T) {
 
 	clocks := 50
 	for i := 0; i < clocks; i++ {
-		block := randomBlock(t, uint32(i+1), getPrevBlockHash(t, bc, uint32(i+1)))
+		privKey := crypto.GeneratePrivateKey()
+		block := NewRandomBlockWithSignature(t, privKey, uint32(i+1), getPrevBlockHash(t, bc, uint32(i+1)))
 		assert.Nil(t, bc.AddBlock(block))
 	}
 
 	assert.Equal(t, uint32(clocks), bc.Height())
 	assert.Equal(t, clocks+1, len(bc.headers))
-	assert.NotNil(t, bc.AddBlock(randomBlock(t, 88, types.Hash{})))
+	assert.NotNil(t, bc.AddBlock(NewRandomBlock(t, 88, types.Hash{})))
 }
 
 func TestHasBlock(t *testing.T) {
@@ -40,7 +42,8 @@ func TestGetHeader(t *testing.T) {
 
 	clocks := 50
 	for i := 0; i < clocks; i++ {
-		block := randomBlock(t, uint32(i+1), getPrevBlockHash(t, bc, uint32(i+1)))
+		privKey := crypto.GeneratePrivateKey()
+		block := NewRandomBlockWithSignature(t, privKey, uint32(i+1), getPrevBlockHash(t, bc, uint32(i+1)))
 		assert.Nil(t, bc.AddBlock(block))
 
 		header, err := bc.GetHeader(block.Height)
@@ -52,12 +55,14 @@ func TestGetHeader(t *testing.T) {
 func TestAddBlockToHigh(t *testing.T) {
 	bc := newBlockchainWithGenesis(t)
 
-	assert.Nil(t, bc.AddBlock(randomBlock(t, uint32(1), getPrevBlockHash(t, bc, uint32(1)))))
-	assert.NotNil(t, bc.AddBlock(randomBlock(t, 3, types.Hash{})))
+	privKeyFirst := crypto.GeneratePrivateKey()
+	assert.Nil(t, bc.AddBlock(NewRandomBlockWithSignature(t, privKeyFirst, uint32(1), getPrevBlockHash(t, bc, uint32(1)))))
+	privKeySecond := crypto.GeneratePrivateKey()
+	assert.NotNil(t, bc.AddBlock(NewRandomBlockWithSignature(t, privKeySecond, 3, types.Hash{})))
 }
 
 func newBlockchainWithGenesis(t *testing.T) *Blockchain {
-	bc, err := NewBlockchain(randomBlock(t, 0, types.Hash{}))
+	bc, err := NewBlockchain(NewRandomBlock(t, 0, types.Hash{}))
 	assert.Nil(t, err)
 
 	return bc

@@ -28,15 +28,7 @@ func main() {
 		panic(err)
 	}
 
-	if err := trRemoteA.Connect(trLocal); err != nil {
-		panic(err)
-	}
-
 	if err := trRemoteA.Connect(trRemoteB); err != nil {
-		panic(err)
-	}
-
-	if err := trRemoteB.Connect(trRemoteA); err != nil {
 		panic(err)
 	}
 
@@ -44,7 +36,7 @@ func main() {
 		panic(err)
 	}
 
-	if err := trRemoteC.Connect(trRemoteB); err != nil {
+	if err := trRemoteA.Connect(trLocal); err != nil {
 		panic(err)
 	}
 
@@ -58,6 +50,20 @@ func main() {
 
 			time.Sleep(2 * time.Second)
 		}
+	}()
+
+	go func() {
+		// syncing lazy transport
+		time.Sleep(7 * time.Second)
+
+		trLate := network.NewLocalTransport("LATE_REMOTE")
+		if err := trRemoteC.Connect(trLate); err != nil {
+			panic(err)
+		}
+
+		lateServer := makeServer(string(trLate.Addr()), trLate, nil)
+
+		go lateServer.Start()
 	}()
 
 	privKey := crypto.GeneratePrivateKey()

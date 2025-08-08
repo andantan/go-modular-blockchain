@@ -6,37 +6,45 @@ import (
 )
 
 type TxPool struct {
-	transactions map[types.Hash]*core.Transaction
+	all     *TxSortedMap
+	pending *TxSortedMap
+
+	maxLength int
 }
 
-func NewTxPool() *TxPool {
+func NewTxPool(maxLength int) *TxPool {
 	return &TxPool{
-		transactions: make(map[types.Hash]*core.Transaction),
+		all:       NewTxSortedMap(),
+		pending:   NewTxSortedMap(),
+		maxLength: maxLength,
 	}
 }
 
-func (p *TxPool) Transactions() []*core.Transaction {
-	s := NewTxMapSorter(p.transactions)
+func (p *TxPool) Add(tx *core.Transaction) {
+	// pruning the oldest tx in the all pool
+	if p.all.Count() == p.maxLength {
+		oldest := p.all.First()
+		p.all.Remove(oldest.Hash(core.TxHasher{}))
+	}
 
-	return s.transactions
+	if !p.all.Contains(tx.Hash(core.TxHasher{})) {
+		p.all.Add(tx)
+		p.pending.Add(tx)
+	}
 }
 
-func (p *TxPool) Add(tx *core.Transaction) error {
-	hash := tx.Hash(core.TxHasher{})
-	p.transactions[hash] = tx
-
-	return nil
+func (p *TxPool) Contains(hash types.Hash) bool {
+	return p.all.Contains(hash)
 }
 
-func (p *TxPool) Has(hash types.Hash) bool {
-	_, ok := p.transactions[hash]
-	return ok
+func (p *TxPool) Pending() []*core.Transaction {
+	return p.pending.txx.Data
 }
 
-func (p *TxPool) Len() int {
-	return len(p.transactions)
+func (p *TxPool) ClearPending() {
+	p.pending.Clear()
 }
 
-func (p *TxPool) Flush() {
-	p.transactions = make(map[types.Hash]*core.Transaction)
+func (p *TxPool) PendingCount() int {
+	return p.pending.Count()
 }

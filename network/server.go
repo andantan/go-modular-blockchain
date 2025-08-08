@@ -41,7 +41,8 @@ func NewServer(opts ServerOpts) (*Server, error) {
 		opts.RPCDecodeFunc = DefaultRPCDecodeFunc
 	}
 
-	chain, err := core.NewBlockchain(core.GetGenesisBlock())
+	txMaxLength := config.GetIntEnvVar("PARAMETER_TX_MAX_LENGTH")
+	chain, err := core.NewBlockchain(opts.ID, core.GetGenesisBlock())
 
 	if err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func NewServer(opts ServerOpts) (*Server, error) {
 
 	s := &Server{
 		ServerOpts:  opts,
-		memPool:     NewTxPool(),
+		memPool:     NewTxPool(txMaxLength),
 		chain:       chain,
 		isValidator: opts.PrivateKey != nil,
 		rpcCh:       make(chan RPC),
@@ -74,7 +75,7 @@ func NewServer(opts ServerOpts) (*Server, error) {
 }
 
 func (s *Server) Start() {
-	logger := config.GetDefaultLogger()
+	logger := config.GetServerLogger()
 	s.initTransports()
 
 free:
@@ -84,11 +85,15 @@ free:
 			msg, err := s.RPCDecodeFunc(rpc)
 
 			if err != nil {
-				logger.Error(err)
+				logger.WithFields(logrus.Fields{
+					"ID": s.ID,
+				}).Error(err)
 			}
 
 			if err := s.RPCProcesor.ProcessMessage(msg); err != nil {
-				logger.Error(err)
+				logger.WithFields(logrus.Fields{
+					"ID": s.ID,
+				}).Error(err)
 			}
 		case <-s.quitCh:
 			break free
@@ -119,13 +124,23 @@ func (s *Server) ProcessMessage(msg *DecodedMessage) error {
 	switch t := msg.Data.(type) {
 	case *core.Transaction:
 		return s.processTransaction(t)
+	case *core.Block:
+		return s.processBlock(t)
 	}
 
 	return nil
 }
 
 func (s *Server) broadcastBlock(b *core.Block) error {
-	return nil
+	buf := &bytes.Buffer{}
+
+	if err := b.Encode(core.NewGobBlockEncoder(buf)); err != nil {
+		return err
+	}
+
+	msg := NewMessage(MessageTypeBlock, buf.Bytes())
+
+	return s.broadcast(msg.Bytes())
 }
 
 func (s *Server) broadcast(payload []byte) error {
@@ -142,7 +157,7 @@ func (s *Server) processTransaction(tx *core.Transaction) error {
 	logger := config.GetServerLogger()
 	hash := tx.Hash(core.TxHasher{})
 
-	if s.memPool.Has(hash) {
+	if s.memPool.Contains(hash) {
 		return nil
 	}
 
@@ -152,11 +167,11 @@ func (s *Server) processTransaction(tx *core.Transaction) error {
 
 	tx.SetFirstSeen(uint64(time.Now().UnixNano()))
 
-	logger.WithFields(logrus.Fields{
-		"ID":            s.ID,
-		"hash":          hash,
-		"mempoolLength": s.memPool.Len() + 1,
-	}).Info("trying to add new tx to the mempool")
+	//logger.WithFields(logrus.Fields{
+	//	"ID":            s.ID,
+	//	"hash":          hash,
+	//	"mempoolLength": s.memPool.PendingCount() + 1,
+	//}).Info("trying to add new tx to the mempool")
 
 	go func() {
 		if err := s.broadcastTx(tx); err != nil {
@@ -164,7 +179,22 @@ func (s *Server) processTransaction(tx *core.Transaction) error {
 		}
 	}()
 
-	return s.memPool.Add(tx)
+	s.memPool.Add(tx)
+
+	return nil
+}
+
+func (s *Server) processBlock(b *core.Block) error {
+	if err := s.chain.AddBlock(b); err != nil {
+		return err
+	}
+
+	// butterfly effect in gossip network
+	go func() {
+		_ = s.broadcastBlock(b)
+	}()
+
+	return nil
 }
 
 func (s *Server) broadcastTx(tx *core.Transaction) error {
@@ -196,7 +226,7 @@ func (s *Server) createNewBlock() error {
 		return err
 	}
 
-	txx := s.memPool.Transactions()
+	txx := s.memPool.Pending()
 
 	block, err := core.NewBlockFromPrevheader(prevHeader, txx)
 
@@ -212,7 +242,11 @@ func (s *Server) createNewBlock() error {
 		return err
 	}
 
-	s.memPool.Flush()
+	s.memPool.ClearPending()
+
+	go func() {
+		_ = s.broadcastBlock(block)
+	}()
 
 	return nil
 }

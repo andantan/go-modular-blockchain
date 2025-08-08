@@ -18,11 +18,11 @@ func NewBlockValidator(bc *Blockchain) *BlockValidator {
 
 func (bv *BlockValidator) ValidateBlock(b *Block) error {
 	if bv.bc.HasBlock(b.Height) {
-		return fmt.Errorf("chain already contains block (%d) with hash (%s)", b.Height, b.Hash(BlockHasher{}))
+		return fmt.Errorf("chain already contains block (height=%d) with hash (%s)", b.Height, b.Hash(BlockHasher{}))
 	}
 
 	if bv.bc.Height()+1 != b.Height {
-		return fmt.Errorf("block (%s) too high", b.Hash(BlockHasher{}))
+		return fmt.Errorf("block (%s) with height (%d) is too high => current height: (%d)", b.Hash(BlockHasher{}), b.Height, bv.bc.Height())
 	}
 
 	prevHeader, err := bv.bc.GetHeader(b.Height - 1)

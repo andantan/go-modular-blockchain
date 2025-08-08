@@ -3,37 +3,77 @@ package network
 import (
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/types"
-	"sort"
+	"sync"
 )
 
-type TxMapSorter struct {
-	transactions []*core.Transaction
+type TxSortedMap struct {
+	lock   sync.RWMutex
+	lookup map[types.Hash]*core.Transaction
+	txx    *types.List[*core.Transaction]
 }
 
-func (s *TxMapSorter) Len() int {
-	return len(s.transactions)
-}
-
-func (s *TxMapSorter) Less(i, j int) bool {
-	return s.transactions[i].FirstSeen() < s.transactions[j].FirstSeen()
-}
-
-func (s *TxMapSorter) Swap(i, j int) {
-	s.transactions[i], s.transactions[j] = s.transactions[j], s.transactions[i]
-}
-
-func NewTxMapSorter(txMap map[types.Hash]*core.Transaction) *TxMapSorter {
-	txx := make([]*core.Transaction, 0, len(txMap))
-
-	for _, tx := range txMap {
-		txx = append(txx, tx)
+func NewTxSortedMap() *TxSortedMap {
+	return &TxSortedMap{
+		lookup: make(map[types.Hash]*core.Transaction),
+		txx:    types.NewList[*core.Transaction](),
 	}
+}
 
-	s := &TxMapSorter{
-		transactions: txx,
+func (t *TxSortedMap) First() *core.Transaction {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	first := t.txx.Get(0)
+
+	return t.lookup[first.Hash(core.TxHasher{})]
+}
+
+func (t *TxSortedMap) Get(h types.Hash) *core.Transaction {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.lookup[h]
+}
+
+func (t *TxSortedMap) Add(tx *core.Transaction) {
+	hash := tx.Hash(core.TxHasher{})
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if _, ok := t.lookup[hash]; !ok {
+		t.lookup[hash] = tx
+		t.txx.Insert(tx)
 	}
+}
 
-	sort.Sort(s)
+func (t *TxSortedMap) Remove(h types.Hash) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
 
-	return s
+	t.txx.Remove(t.lookup[h])
+	delete(t.lookup, h)
+}
+
+func (t *TxSortedMap) Count() int {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return len(t.lookup)
+}
+
+func (t *TxSortedMap) Contains(h types.Hash) bool {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	_, ok := t.lookup[h]
+	return ok
+}
+
+func (t *TxSortedMap) Clear() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.lookup = make(map[types.Hash]*core.Transaction)
+	t.txx.Clear()
 }

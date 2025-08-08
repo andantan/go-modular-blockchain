@@ -3,7 +3,6 @@ package types
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/andantan/go-modular-blockchain/random"
 )
 
 const (
@@ -39,8 +38,4 @@ func MustHashFromBytes(b []byte) Hash {
 	copy(h[:], b[:])
 
 	return h
-}
-
-func RandomHash() Hash {
-	return MustHashFromBytes(random.GenerateRandomBytes(HashLength))
 }

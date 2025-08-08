@@ -3,7 +3,7 @@ package core
 import (
 	"bytes"
 	"github.com/andantan/go-modular-blockchain/crypto"
-	"github.com/andantan/go-modular-blockchain/random"
+	"github.com/andantan/go-modular-blockchain/util"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -61,7 +61,7 @@ func randomTxWithSignature(t *testing.T) *Transaction {
 	privKey := crypto.GeneratePrivateKey()
 
 	tx := &Transaction{
-		Data: random.GenerateRandomBytes(128),
+		Data: util.GenerateRandomBytes(128),
 	}
 
 	assert.Nil(t, tx.Sign(privKey))

@@ -73,9 +73,8 @@ func (f *CustomFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 	_, _ = fmt.Fprintf(b, " %s ", entry.Message)
 
-	// --- WithFields로 추가된 필드(key=value)에 색상 및 정렬 적용 ---
-	if len(entry.Data) > 0 { // 필드가 있을 때만 공백 추가
-		b.WriteString(" ") // 메시지와 필드 사이의 공백
+	if len(entry.Data) > 0 {
+		b.WriteString(" ")
 	}
 
 	keys := make([]string, 0, len(entry.Data))
@@ -103,7 +102,7 @@ func (f *CustomFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 			b.WriteString(fmt.Sprintf("%v", v))
 		}
 	}
-	b.WriteByte('\n') // 줄바꿈 추가
+	b.WriteByte('\n')
 
 	return b.Bytes(), nil
 }
