@@ -33,8 +33,32 @@ func (bc *Blockchain) SetValidator(validator Validator) {
 }
 
 func (bc *Blockchain) AddBlock(block *Block) error {
+	logger := config.GetBlockchainLogger()
+
 	if err := bc.validator.ValidateBlock(block); err != nil {
 		return err
+	}
+
+	for _, tx := range block.Transactions {
+		if logger != nil {
+			logger.WithFields(logrus.Fields{
+				"hash":   block.Hash(BlockHasher{}),
+				"length": len(tx.Data),
+			}).Info("executing code")
+		}
+
+		vm := NewVM(tx.Data)
+
+		if err := vm.Run(); err != nil {
+			return err
+		}
+
+		if logger != nil {
+			logger.WithFields(logrus.Fields{
+				"hash":   block.Hash(BlockHasher{}),
+				"result": vm.stack[vm.sp],
+			}).Info("vm result")
+		}
 	}
 
 	return bc.addBlockWithoutValidation(block)
@@ -72,12 +96,15 @@ func (bc *Blockchain) addBlockWithoutValidation(block *Block) error {
 	bc.headers = append(bc.headers, block.Header)
 	bc.lock.Unlock()
 
-	logger.WithFields(logrus.Fields{
-		"ID":          bc.ID,
-		"height":      block.Height,
-		"hash":        block.Hash(BlockHasher{}),
-		"length(txx)": len(block.Transactions),
-	}).Info("new block")
+	// test pruning
+	if logger != nil {
+		logger.WithFields(logrus.Fields{
+			"ID":          bc.ID,
+			"height":      block.Height,
+			"hash":        block.Hash(BlockHasher{}),
+			"length(txx)": len(block.Transactions),
+		}).Info("new block")
+	}
 
 	return bc.store.Put(block)
 }

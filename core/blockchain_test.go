@@ -62,7 +62,7 @@ func TestAddBlockToHigh(t *testing.T) {
 }
 
 func newBlockchainWithGenesis(t *testing.T) *Blockchain {
-	bc, err := NewBlockchain(NewRandomBlock(t, 0, types.Hash{}))
+	bc, err := NewBlockchain("TEST", NewRandomBlock(t, 0, types.Hash{}))
 	assert.Nil(t, err)
 
 	return bc

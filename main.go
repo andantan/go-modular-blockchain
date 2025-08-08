@@ -7,8 +7,6 @@ import (
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/network"
-	"math/rand"
-	"strconv"
 	"time"
 )
 
@@ -98,7 +96,7 @@ func makeServer(ID string, tr network.Transport, pk *crypto.PrivateKey) *network
 
 func sendTransaction(tr network.Transport, to network.NetAddr) error {
 	privkey := crypto.GeneratePrivateKey()
-	data := []byte(strconv.FormatInt(int64(rand.Intn(1000)), 10))
+	data := []byte{0x01, 0x0a, 0x02, 0x0a, 0x0b}
 	tx := core.NewTransaction(data)
 
 	if err := tx.Sign(privkey); err != nil {
