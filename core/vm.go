@@ -13,6 +13,9 @@ const (
 	InstrAdd      Instruction = 0x0d // 13
 	InstrSub      Instruction = 0x0e // 14
 	InstrStore    Instruction = 0x0f // 15
+	InstrGet      Instruction = 0x10 // 16
+	InstrMul      Instruction = 0x11 // 17
+	InstrDiv      Instruction = 0x12 // 18
 )
 
 type Stack struct {
@@ -28,7 +31,8 @@ func NewStack(size int) *Stack {
 }
 
 func (s *Stack) Push(v any) {
-	s.data[s.sp] = v
+	s.data = append([]any{v}, s.data...)
+	// s.data[s.sp] = v
 	s.sp++
 }
 
@@ -105,15 +109,13 @@ func (vm *VM) Exec(instr Instruction) error {
 		vm.stack.Push(b)
 
 	case InstrAdd:
-		a := vm.stack.PopAsInt()
-		b := vm.stack.PopAsInt()
+		a, b := vm.stack.PopAsInt(), vm.stack.PopAsInt()
 		c := a + b
 
 		vm.stack.Push(c)
 
 	case InstrSub:
-		a := vm.stack.PopAsInt()
-		b := vm.stack.PopAsInt()
+		a, b := vm.stack.PopAsInt(), vm.stack.PopAsInt()
 		c := a - b
 
 		vm.stack.Push(c)
@@ -133,6 +135,26 @@ func (vm *VM) Exec(instr Instruction) error {
 		}
 
 		_ = vm.contractState.Put(key, serializeValue)
+
+	case InstrGet:
+		key := vm.stack.PopAsByteSlice()
+		value, err := vm.contractState.Get(key)
+
+		if err != nil {
+			return err
+		}
+
+		vm.stack.Push(value)
+
+	case InstrMul:
+		a, b := vm.stack.PopAsInt(), vm.stack.PopAsInt()
+		c := a * b
+		vm.stack.Push(c)
+
+	case InstrDiv:
+		a, b := vm.stack.PopAsInt(), vm.stack.PopAsInt()
+		c := b / a
+		vm.stack.Push(c)
 	}
 
 	return nil

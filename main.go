@@ -96,10 +96,7 @@ func makeServer(ID string, tr network.Transport, pk *crypto.PrivateKey) *network
 
 func sendTransaction(tr network.Transport, to network.NetAddr) error {
 	privkey := crypto.GeneratePrivateKey()
-	data := []byte{
-		0x03, 0x0a, 0x46, 0x0b, 0x4f, 0x0b, 0x4f, 0x0b, 0x0c, 0x03, 0x0a, 0x0f,
-	}
-	tx := core.NewTransaction(data)
+	tx := core.NewTransaction(contract())
 
 	if err := tx.Sign(privkey); err != nil {
 		return err
@@ -114,4 +111,23 @@ func sendTransaction(tr network.Transport, to network.NetAddr) error {
 	msg := network.NewMessage(network.MessageTypeTx, buf.Bytes())
 
 	return tr.SendMessage(to, msg.Bytes())
+}
+
+func contract() []byte {
+	data := []byte{
+		0x02, 0x0a, 0x03, 0x0a,
+		0x0d, 0x4f, 0x0b, 0x4f,
+		0x0b, 0x46, 0x0b, 0x03,
+		0x0a, 0x0c, 0x0f,
+	}
+
+	pushFOO := []byte{
+		0x4f, 0x0b, 0x4f, 0x0b,
+		0x46, 0x0b, 0x03, 0x0a,
+		0x0c, 0x10,
+	}
+
+	data = append(data, pushFOO...)
+
+	return data
 }
