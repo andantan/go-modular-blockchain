@@ -2,6 +2,8 @@ package network
 
 import (
 	"bytes"
+	"encoding/gob"
+	"fmt"
 	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
@@ -11,6 +13,7 @@ import (
 
 type ServerOpts struct {
 	ID            string
+	Transport     Transport
 	RPCDecodeFunc RPCDecodeFunc
 	RPCProcesor   RPCProcesor
 	Transports    []Transport
@@ -29,6 +32,8 @@ type Server struct {
 }
 
 func NewServer(opts ServerOpts) (*Server, error) {
+	logger := config.GetServerLogger()
+
 	if opts.BlockTime == time.Duration(0) {
 		timerUnit := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_UNIT")
 		timerDuration := config.GetIntEnvVar("PARAMETER_BLOCK_TIME_DURATION")
@@ -61,7 +66,7 @@ func NewServer(opts ServerOpts) (*Server, error) {
 		s.RPCProcesor = s
 	}
 
-	config.GetServerLogger().WithFields(logrus.Fields{
+	logger.WithFields(logrus.Fields{
 		"ID":          opts.ID,
 		"isValidator": s.isValidator,
 		"blockTime":   opts.BlockTime,
@@ -70,6 +75,14 @@ func NewServer(opts ServerOpts) (*Server, error) {
 	if s.isValidator {
 		go s.validatorLoop()
 	}
+
+	//tr := s.Transports[0].(*LocalTransport)
+	//fmt.Printf("%+v\n", tr.peers)
+	//for _, tr := range s.Transports {
+	//	if err := s.sendStatusMessage(tr); err != nil {
+	//		logger.Errorf("failed to send get status message: %v", err)
+	//	}
+	//}
 
 	return s, nil
 }
@@ -104,7 +117,7 @@ free:
 }
 
 func (s *Server) validatorLoop() {
-	logger := config.GetDefaultLogger()
+	logger := config.GetServerLogger()
 	ticker := time.NewTicker(s.BlockTime)
 
 	logger.WithFields(logrus.Fields{
@@ -124,8 +137,34 @@ func (s *Server) ProcessMessage(msg *DecodedMessage) error {
 	switch t := msg.Data.(type) {
 	case *core.Transaction:
 		return s.processTransaction(t)
+
 	case *core.Block:
 		return s.processBlock(t)
+
+	case *GetStatusMessage:
+		return s.processGetStatusMessage(msg.From, t)
+
+	case *StatusMessage:
+		return s.processStatusMessage(msg.From, t)
+	}
+
+	return nil
+}
+
+func (s *Server) sendStatusMessage(tr Transport) error {
+	var (
+		getStatusMsg = new(GetStatusMessage)
+		buf          = new(bytes.Buffer)
+	)
+
+	if err := gob.NewEncoder(buf).Encode(getStatusMsg); err != nil {
+		return err
+	}
+
+	msg := NewMessage(MessageTypeGetStatus, buf.Bytes())
+
+	if err := tr.SendMessage(tr.Addr(), msg.Bytes()); err != nil {
+		return err
 	}
 
 	return nil
@@ -193,6 +232,31 @@ func (s *Server) processBlock(b *core.Block) error {
 	go func() {
 		_ = s.broadcastBlock(b)
 	}()
+
+	return nil
+}
+
+func (s *Server) processGetStatusMessage(from NetAddr, data *GetStatusMessage) error {
+	fmt.Printf("=> received GetStatus msg from %s => %+v\n", from, data)
+
+	statusMessage := &StatusMessage{
+		ID:            s.ID,
+		CurrentHeight: s.chain.Height(),
+	}
+
+	buf := &bytes.Buffer{}
+
+	if err := gob.NewEncoder(buf).Encode(statusMessage); err != nil {
+		return err
+	}
+
+	msg := NewMessage(MessageTypeStatus, buf.Bytes())
+
+	return s.Transport.SendMessage(from, msg.Bytes())
+}
+
+func (s *Server) processStatusMessage(from NetAddr, data *StatusMessage) error {
+	fmt.Printf("=> received GetStatus response msg from %s => %+v\n", from, data)
 
 	return nil
 }

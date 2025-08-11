@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
@@ -34,6 +35,10 @@ func main() {
 		panic(err)
 	}
 
+	if err := trRemoteB.Connect(trRemoteA); err != nil {
+		panic(err)
+	}
+
 	if err := trRemoteA.Connect(trLocal); err != nil {
 		panic(err)
 	}
@@ -49,6 +54,10 @@ func main() {
 			time.Sleep(2 * time.Second)
 		}
 	}()
+
+	if err := sendGetStatusMessage(trRemoteA, "REMOTE_B"); err != nil {
+		config.GetDefaultLogger().Error(err)
+	}
 
 	//go func() {
 	//	// syncing lazy transport
@@ -81,6 +90,7 @@ func initRemoteServers(trs []network.Transport) {
 func makeServer(ID string, tr network.Transport, pk *crypto.PrivateKey) *network.Server {
 	opts := network.ServerOpts{
 		ID:         ID,
+		Transport:  tr,
 		Transports: []network.Transport{tr},
 		PrivateKey: pk,
 	}
@@ -92,6 +102,21 @@ func makeServer(ID string, tr network.Transport, pk *crypto.PrivateKey) *network
 	}
 
 	return s
+}
+
+func sendGetStatusMessage(tr network.Transport, to network.NetAddr) error {
+	var (
+		getStatusMsg = new(network.GetStatusMessage)
+		buf          = new(bytes.Buffer)
+	)
+
+	if err := gob.NewEncoder(buf).Encode(getStatusMsg); err != nil {
+		return err
+	}
+
+	msg := network.NewMessage(network.MessageTypeGetStatus, buf.Bytes())
+
+	return tr.SendMessage(to, msg.Bytes())
 }
 
 func sendTransaction(tr network.Transport, to network.NetAddr) error {
