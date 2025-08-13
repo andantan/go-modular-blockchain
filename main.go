@@ -8,80 +8,61 @@ import (
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/network"
-	"time"
+	"log"
 )
 
 func init() {
 	config.InitEnv()
-	config.InitLogger(config.GetEnvVar("SERVER_NAME"))
+	// config.InitLogger(config.GetEnvVar("SERVER_NAME"))
+}
+
+var transports = []network.Transport{
+	network.NewLocalTransport("LOCAL"),
+	network.NewLocalTransport("REMOTE_A"),
+	//network.NewLocalTransport("REMOTE_B"),
+	//network.NewLocalTransport("REMOTE_C"),
 }
 
 func main() {
-	trLocal := network.NewLocalTransport("LOCAL")
-	trRemoteA := network.NewLocalTransport("REMOTE_A")
-	trRemoteB := network.NewLocalTransport("REMOTE_B")
-	trRemoteC := network.NewLocalTransport("REMOTE_C")
+	initRemoteServers(transports)
 
-	// prototype
-	if err := trLocal.Connect(trRemoteA); err != nil {
-		panic(err)
-	}
+	localTr := transports[0]
+	// lateTr := network.NewLocalTransport("LATE_NODE")
+	// remoteNodeA := transports[1]
+	// remoteNodeC := transports[3]
 
-	if err := trRemoteA.Connect(trRemoteB); err != nil {
-		panic(err)
-	}
-
-	if err := trRemoteB.Connect(trRemoteC); err != nil {
-		panic(err)
-	}
-
-	if err := trRemoteB.Connect(trRemoteA); err != nil {
-		panic(err)
-	}
-
-	if err := trRemoteA.Connect(trLocal); err != nil {
-		panic(err)
-	}
-
-	initRemoteServers([]network.Transport{trRemoteA, trRemoteB, trRemoteC})
-
-	go func() {
-		for {
-			if err := sendTransaction(trRemoteA, trLocal.Addr()); err != nil {
-				config.GetDefaultLogger().Error(err)
-			}
-
-			time.Sleep(2 * time.Second)
-		}
-	}()
-
-	if err := sendGetStatusMessage(trRemoteA, "REMOTE_B"); err != nil {
-		config.GetDefaultLogger().Error(err)
-	}
+	//go func() {
+	//	for {
+	//		if err := sendTransaction(remoteNodeA, localNode.Addr()); err != nil {
+	//			config.GetDefaultLogger().Error(err)
+	//		}
+	//
+	//		time.Sleep(2 * time.Second)
+	//	}
+	//}()
 
 	//go func() {
 	//	// syncing lazy transport
 	//	time.Sleep(7 * time.Second)
 	//
-	//	trLate := network.NewLocalTransport("LATE_REMOTE")
-	//	if err := trRemoteC.Connect(trLate); err != nil {
-	//		panic(err)
-	//	}
+	//	//if err := remoteNodeC.Connect(lateTr); err != nil {
+	//	//	panic(err)
+	//	//}
 	//
-	//	lateServer := makeServer(string(trLate.Addr()), trLate, nil)
+	//	lateServer := makeServer(string(lateTr.Addr()), lateTr, nil)
 	//
 	//	go lateServer.Start()
 	//}()
 
 	privKey := crypto.GeneratePrivateKey()
-	localServer := makeServer("local", trLocal, &privKey)
+	localServer := makeServer("LOCAL", localTr, &privKey)
 	localServer.Start()
 }
 
 func initRemoteServers(trs []network.Transport) {
-	for i, tr := range trs {
+	for i := 0; i < len(trs); i++ {
 		id := fmt.Sprintf("REMOTE_%d", i)
-		s := makeServer(id, tr, nil)
+		s := makeServer(id, trs[i], nil)
 
 		go s.Start()
 	}
@@ -91,14 +72,14 @@ func makeServer(ID string, tr network.Transport, pk *crypto.PrivateKey) *network
 	opts := network.ServerOpts{
 		ID:         ID,
 		Transport:  tr,
-		Transports: []network.Transport{tr},
+		Transports: transports,
 		PrivateKey: pk,
 	}
 
 	s, err := network.NewServer(opts)
 
 	if err != nil {
-		config.GetDefaultLogger().Fatal(err)
+		log.Fatal(err)
 	}
 
 	return s

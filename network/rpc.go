@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
-	"github.com/sirupsen/logrus"
 	"io"
 )
 
@@ -60,10 +58,10 @@ func DefaultRPCDecodeFunc(rpc RPC) (*DecodedMessage, error) {
 
 	// fmt.Printf("receiving message: %+v\n", msg)
 
-	config.GetNetworkLogger().WithFields(logrus.Fields{
-		"from": rpc.From,
-		"type": msg.Header,
-	}).Debug("new incoming message")
+	//config.GetNetworkLogger().WithFields(logrus.Fields{
+	//	"from": rpc.From,
+	//	"type": msg.Header,
+	//}).Debug("new incoming message")
 
 	switch msg.Header {
 	case MessageTypeTx:

@@ -2,13 +2,12 @@ package core
 
 import (
 	"fmt"
-	"github.com/andantan/go-modular-blockchain/config"
-	"github.com/sirupsen/logrus"
+	"github.com/go-kit/log"
 	"sync"
 )
 
 type Blockchain struct {
-	ID            string
+	Logger        log.Logger
 	store         Storage
 	lock          sync.RWMutex
 	headers       []*Header
@@ -16,9 +15,9 @@ type Blockchain struct {
 	contractState *State // TODO: make this an interface
 }
 
-func NewBlockchain(id string, genesis *Block) (*Blockchain, error) {
+func NewBlockchain(logger log.Logger, genesis *Block) (*Blockchain, error) {
 	bc := &Blockchain{
-		ID:            id,
+		Logger:        logger,
 		headers:       []*Header{},
 		store:         NewMemoryStorage(),
 		contractState: NewState(),
@@ -35,19 +34,16 @@ func (bc *Blockchain) SetValidator(validator Validator) {
 }
 
 func (bc *Blockchain) AddBlock(block *Block) error {
-	logger := config.GetBlockchainLogger()
-
 	if err := bc.validator.ValidateBlock(block); err != nil {
 		return err
 	}
 
 	for _, tx := range block.Transactions {
-		if logger != nil {
-			logger.WithFields(logrus.Fields{
-				"hash":   block.Hash(BlockHasher{}),
-				"length": len(tx.Data),
-			}).Info("executing code")
-		}
+		_ = bc.Logger.Log(
+			"msg", "executing code",
+			"hash", block.Hash(BlockHasher{}),
+			"length", len(tx.Data),
+		)
 
 		vm := NewVM(tx.Data, bc.contractState)
 
@@ -91,21 +87,21 @@ func (bc *Blockchain) Height() uint32 {
 }
 
 func (bc *Blockchain) addBlockWithoutValidation(block *Block) error {
-	logger := config.GetBlockchainLogger()
-
 	bc.lock.Lock()
 	bc.headers = append(bc.headers, block.Header)
 	bc.lock.Unlock()
 
+	// _ = bc.Logger.Log("blockData", fmt.Sprintf("%+v", block))
+
+	// fmt.Printf("add block (%d)", block.Height)
+
 	// test pruning
-	if logger != nil {
-		logger.WithFields(logrus.Fields{
-			"ID":          bc.ID,
-			"height":      block.Height,
-			"hash":        block.Hash(BlockHasher{}),
-			"length(txx)": len(block.Transactions),
-		}).Info("new block")
-	}
+	_ = bc.Logger.Log(
+		"msg", "new block",
+		"height", block.Height,
+		"hash", block.Hash(BlockHasher{}),
+		"length(txx)", len(block.Transactions),
+	)
 
 	return bc.store.Put(block)
 }
