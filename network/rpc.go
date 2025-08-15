@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/andantan/go-modular-blockchain/core"
 	"io"
+	"net"
 )
 
 type MessageType byte
@@ -19,7 +20,7 @@ const (
 )
 
 type RPC struct {
-	From    NetAddr
+	From    net.Addr // string
 	Payload io.Reader
 }
 
@@ -43,7 +44,7 @@ func (msg *Message) Bytes() []byte {
 }
 
 type DecodedMessage struct {
-	From NetAddr
+	From net.Addr
 	Data any
 }
 
@@ -55,13 +56,6 @@ func DefaultRPCDecodeFunc(rpc RPC) (*DecodedMessage, error) {
 	if err := gob.NewDecoder(rpc.Payload).Decode(&msg); err != nil {
 		return nil, fmt.Errorf("failed to decode message from %s: %s", rpc.From, err)
 	}
-
-	// fmt.Printf("receiving message: %+v\n", msg)
-
-	//config.GetNetworkLogger().WithFields(logrus.Fields{
-	//	"from": rpc.From,
-	//	"type": msg.Header,
-	//}).Debug("new incoming message")
 
 	switch msg.Header {
 	case MessageTypeTx:

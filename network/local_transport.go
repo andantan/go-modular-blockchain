@@ -3,21 +3,22 @@ package network
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"sync"
 )
 
 type LocalTransport struct {
-	addr      NetAddr
+	addr      net.Addr
 	consumeCh chan RPC
 	lock      sync.Mutex
-	peers     map[NetAddr]*LocalTransport
+	peers     map[net.Addr]*LocalTransport
 }
 
-func NewLocalTransport(addr NetAddr) Transport {
+func NewLocalTransport(addr net.Addr) Transport {
 	return &LocalTransport{
 		addr:      addr,
 		consumeCh: make(chan RPC, 1024),
-		peers:     make(map[NetAddr]*LocalTransport),
+		peers:     make(map[net.Addr]*LocalTransport),
 	}
 }
 
@@ -34,7 +35,7 @@ func (t *LocalTransport) Connect(tr Transport) error {
 	return nil
 }
 
-func (t *LocalTransport) SendMessage(to NetAddr, payload []byte) error {
+func (t *LocalTransport) SendMessage(to net.Addr, payload []byte) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
@@ -66,6 +67,6 @@ func (t *LocalTransport) Broadcast(payload []byte) error {
 
 	return nil
 }
-func (t *LocalTransport) Addr() NetAddr {
+func (t *LocalTransport) Addr() net.Addr {
 	return t.addr
 }

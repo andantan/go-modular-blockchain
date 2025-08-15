@@ -51,11 +51,7 @@ func (bc *Blockchain) AddBlock(block *Block) error {
 			return err
 		}
 
-		// fmt.Printf("STATE: %+v\n", vm.contractState)
-
-		// result := vm.stack.Pop()
-
-		// fmt.Printf("VM RESULT: %+v\n", result)
+		fmt.Printf("STATE: %+v\n", vm.contractState)
 	}
 
 	return bc.addBlockWithoutValidation(block)
@@ -90,10 +86,6 @@ func (bc *Blockchain) addBlockWithoutValidation(block *Block) error {
 	bc.lock.Lock()
 	bc.headers = append(bc.headers, block.Header)
 	bc.lock.Unlock()
-
-	// _ = bc.Logger.Log("blockData", fmt.Sprintf("%+v", block))
-
-	// fmt.Printf("add block (%d)", block.Height)
 
 	// test pruning
 	_ = bc.Logger.Log(
