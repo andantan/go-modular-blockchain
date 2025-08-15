@@ -16,8 +16,8 @@ func TestStack(t *testing.T) {
 	v1 := s.Pop()
 	v2 := s.Pop()
 
-	assert.Equal(t, v1, 1)
-	assert.Equal(t, v2, 2)
+	assert.Equal(t, v1, 2)
+	assert.Equal(t, v2, 1)
 
 	assert.Nil(t, s.data[0])
 	assert.Nil(t, s.data[1])

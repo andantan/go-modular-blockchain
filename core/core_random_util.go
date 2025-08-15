@@ -3,7 +3,6 @@ package core
 import (
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/types"
-	"github.com/andantan/go-modular-blockchain/util"
 	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
@@ -11,7 +10,12 @@ import (
 
 // NewRandomTransaction return a new random transaction whithout signature.
 func NewRandomTransaction(size int) *Transaction {
-	return NewTransaction(util.GenerateRandomBytes(size))
+	data := []byte{
+		0x02, 0x0a, 0x03, 0x0a, 0x11,
+	}
+
+	//return NewTransaction(util.GenerateRandomBytes(size))
+	return NewTransaction(data)
 }
 
 func NewRandomTransactionWithSignature(t *testing.T, privKey crypto.PrivateKey, size int) *Transaction {

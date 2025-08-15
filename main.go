@@ -8,6 +8,7 @@ import (
 	"github.com/andantan/go-modular-blockchain/network"
 	"log"
 	"net"
+	"time"
 )
 
 func init() {
@@ -29,6 +30,19 @@ func main() {
 	remoteNodeB := makeServer("REMOTE_NODE_B", ":5000", nil, nil)
 
 	go remoteNodeB.Start()
+
+	go func() {
+		time.Sleep(6 * time.Second)
+
+		lateSeedNodes := []string{":4000"}
+		lateNode := makeServer("LATE_NODE", ":6000", nil, lateSeedNodes)
+
+		go lateNode.Start()
+	}()
+
+	time.Sleep(time.Second)
+
+	tcpTester()
 
 	select {}
 }

@@ -3,7 +3,9 @@ package core
 import (
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/types"
+	"github.com/go-kit/log"
 	"github.com/stretchr/testify/assert"
+	"os"
 	"testing"
 )
 
@@ -62,7 +64,8 @@ func TestAddBlockToHigh(t *testing.T) {
 }
 
 func newBlockchainWithGenesis(t *testing.T) *Blockchain {
-	bc, err := NewBlockchain("TEST", NewRandomBlock(t, 0, types.Hash{}))
+	logger := log.NewLogfmtLogger(os.Stdout)
+	bc, err := NewBlockchain(logger, NewRandomBlock(t, 0, types.Hash{}))
 	assert.Nil(t, err)
 
 	return bc

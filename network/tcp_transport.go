@@ -104,7 +104,5 @@ func (t *TCPTransport) acceptLoop() {
 
 		peer := NewTCPPeer(conn)
 		t.peerCh <- peer
-
-		fmt.Printf("new incoming TCP connection => %+v\n", conn)
 	}
 }
