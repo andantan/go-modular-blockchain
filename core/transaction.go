@@ -21,6 +21,10 @@ func NewTransaction(data []byte) *Transaction {
 	}
 }
 
+func (tx *Transaction) String() string {
+	return tx.Hash(TxHasher{}).String()
+}
+
 func (tx *Transaction) Hash(hasher Hasher[*Transaction]) types.Hash {
 	if tx.hash.IsZero() {
 		tx.hash = hasher.Hash(tx)

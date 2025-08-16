@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"github.com/andantan/go-modular-blockchain/config"
+	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/network"
 	"log"
+	"net"
 	"time"
 )
 
@@ -39,6 +42,8 @@ func main() {
 
 	time.Sleep(time.Second)
 
+	txSender()
+
 	select {}
 }
 
@@ -66,41 +71,41 @@ func makeServer(
 	return s
 }
 
-//func tcpTester() {
-//	conn, err := net.Dial("tcp", ":3000")
-//
-//	if err != nil {
-//		panic(err)
-//	}
-//
-//	data := []byte{
-//		0x02, 0x0a, 0x03, 0x0a,
-//		0x0d, 0x4f, 0x0b, 0x4f,
-//		0x0b, 0x46, 0x0b, 0x03,
-//		0x0a, 0x0c, 0x0f,
-//	}
-//
-//	privkey := crypto.GeneratePrivateKey()
-//	tx := core.NewTransaction(data)
-//
-//	if err := tx.Sign(privkey); err != nil {
-//		panic(err)
-//	}
-//
-//	buf := &bytes.Buffer{}
-//
-//	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
-//		panic(err)
-//	}
-//
-//	msg := network.NewMessage(network.MessageTypeTx, buf.Bytes())
-//
-//	_, err = conn.Write(msg.Bytes())
-//
-//	if err != nil {
-//		panic(err)
-//	}
-//}
+func txSender() {
+	conn, err := net.Dial("tcp", ":3000")
+
+	if err != nil {
+		panic(err)
+	}
+
+	data := []byte{
+		0x02, 0x0a, 0x03, 0x0a,
+		0x0d, 0x4f, 0x0b, 0x4f,
+		0x0b, 0x46, 0x0b, 0x03,
+		0x0a, 0x0c, 0x0f,
+	}
+
+	privkey := crypto.GeneratePrivateKey()
+	tx := core.NewTransaction(data)
+
+	if err := tx.Sign(privkey); err != nil {
+		panic(err)
+	}
+
+	buf := &bytes.Buffer{}
+
+	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
+		panic(err)
+	}
+
+	msg := network.NewMessage(network.MessageTypeTx, buf.Bytes())
+
+	_, err = conn.Write(msg.Bytes())
+
+	if err != nil {
+		panic(err)
+	}
+}
 
 //func sendTransaction(tr network.Transport, to network.NetAddr) error {
 //	privkey := crypto.GeneratePrivateKey()

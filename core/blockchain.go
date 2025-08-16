@@ -2,16 +2,20 @@ package core
 
 import (
 	"fmt"
+	"github.com/andantan/go-modular-blockchain/types"
 	"github.com/go-kit/log"
 	"sync"
 )
 
 type Blockchain struct {
-	Logger        log.Logger
-	store         Storage
+	Logger log.Logger
+	store  Storage
+	// TODO: double check
 	lock          sync.RWMutex
 	headers       []*Header
 	blocks        []*Block
+	blockStore    map[types.Hash]*Block
+	txStore       map[types.Hash]*Transaction
 	validator     Validator
 	contractState *State // TODO: make this an interface
 }
@@ -22,6 +26,8 @@ func NewBlockchain(logger log.Logger, genesis *Block) (*Blockchain, error) {
 		headers:       []*Header{},
 		store:         NewMemoryStorage(),
 		contractState: NewState(),
+		blockStore:    make(map[types.Hash]*Block),
+		txStore:       make(map[types.Hash]*Transaction),
 	}
 
 	bc.validator = NewBlockValidator(bc)
@@ -51,11 +57,22 @@ func (bc *Blockchain) AddBlock(block *Block) error {
 		if err := vm.Run(); err != nil {
 			return err
 		}
-
-		// _ = bc.Logger.Log("state", fmt.Sprintf("%+v", bc.contractState))
 	}
 
 	return bc.addBlockWithoutValidation(block)
+}
+
+func (bc *Blockchain) GetBlockByHash(h types.Hash) (*Block, error) {
+	bc.lock.RLock()
+	defer bc.lock.RUnlock()
+
+	b, ok := bc.blockStore[h]
+
+	if !ok {
+		return nil, fmt.Errorf("block with hash (%s) not found", h.String())
+	}
+
+	return b, nil
 }
 
 func (bc *Blockchain) GetBlock(height uint32) (*Block, error) {
@@ -80,6 +97,19 @@ func (bc *Blockchain) GetHeader(height uint32) (*Header, error) {
 	return bc.headers[height], nil
 }
 
+func (bc *Blockchain) GetTxByHash(h types.Hash) (*Transaction, error) {
+	bc.lock.RLock()
+	defer bc.lock.RUnlock()
+
+	tx, ok := bc.txStore[h]
+
+	if !ok {
+		return nil, fmt.Errorf("tx with hash (%s) not found", h.String())
+	}
+
+	return tx, nil
+}
+
 func (bc *Blockchain) HasBlock(height uint32) bool {
 	bc.lock.RLock()
 	defer bc.lock.RUnlock()
@@ -98,6 +128,12 @@ func (bc *Blockchain) addBlockWithoutValidation(b *Block) error {
 	bc.lock.Lock()
 	bc.headers = append(bc.headers, b.Header)
 	bc.blocks = append(bc.blocks, b)
+	bc.blockStore[b.Hash(BlockHasher{})] = b
+
+	for _, tx := range b.Transactions {
+		bc.txStore[tx.Hash(TxHasher{})] = tx
+	}
+
 	bc.lock.Unlock()
 
 	// test pruning

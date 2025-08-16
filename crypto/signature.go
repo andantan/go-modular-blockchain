@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"encoding/hex"
 	"math/big"
 )
 
@@ -22,4 +23,10 @@ func (sig Signature) Verify(pk PublicKey, data []byte) bool {
 	}
 
 	return ecdsa.Verify(key, data, sig.R, sig.S)
+}
+
+func (sig Signature) String() string {
+	b := append(sig.R.Bytes(), sig.S.Bytes()...)
+
+	return hex.EncodeToString(b)
 }
