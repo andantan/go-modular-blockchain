@@ -15,16 +15,16 @@ func init() {
 func main() {
 	privKey := crypto.GeneratePrivateKey()
 	localSeedNodes := []string{":4000"}
-	localNode := makeServer("LOCAL_NODE", ":3000", &privKey, localSeedNodes)
+	localNode := makeServer("LOCAL_NODE", ":3000", ":9999", &privKey, localSeedNodes)
 
 	go localNode.Start()
 
 	remoteSeedNodes := []string{":5000"}
-	remoteNode := makeServer("REMOTE_NODE", ":4000", nil, remoteSeedNodes)
+	remoteNode := makeServer("REMOTE_NODE", ":4000", "", nil, remoteSeedNodes)
 
 	go remoteNode.Start()
 
-	remoteNodeB := makeServer("REMOTE_NODE_B", ":5000", nil, nil)
+	remoteNodeB := makeServer("REMOTE_NODE_B", ":5000", "", nil, nil)
 
 	go remoteNodeB.Start()
 
@@ -32,22 +32,29 @@ func main() {
 		time.Sleep(11 * time.Second)
 
 		lateSeedNodes := []string{":4000"}
-		lateNode := makeServer("LATE_NODE", ":6000", nil, lateSeedNodes)
+		lateNode := makeServer("LATE_NODE", ":6000", "", nil, lateSeedNodes)
 
 		go lateNode.Start()
 	}()
 
 	time.Sleep(time.Second)
-	
+
 	select {}
 }
 
-func makeServer(ID string, addr string, pk *crypto.PrivateKey, seedNodes []string) *network.Server {
+func makeServer(
+	ID string,
+	addr string,
+	apiListenerAddr string,
+	pk *crypto.PrivateKey,
+	seedNodes []string,
+) *network.Server {
 	opts := network.ServerOpts{
-		ID:         ID,
-		ListenAddr: addr,
-		SeedNodes:  seedNodes,
-		PrivateKey: pk,
+		ID:            ID,
+		ListenAddr:    addr,
+		APIListenAddr: apiListenerAddr,
+		SeedNodes:     seedNodes,
+		PrivateKey:    pk,
 	}
 
 	s, err := network.NewServer(opts)

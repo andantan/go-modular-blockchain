@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"github.com/andantan/go-modular-blockchain/api"
 	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/crypto"
@@ -18,6 +19,7 @@ import (
 type ServerOpts struct {
 	ID            string
 	ListenAddr    string
+	APIListenAddr string
 	Logger        log.Logger
 	SeedNodes     []string
 	TCPTransport  *TCPTransport
@@ -66,6 +68,25 @@ func NewServer(opts ServerOpts) (*Server, error) {
 
 	if err != nil {
 		return nil, err
+	}
+
+	if len(opts.APIListenAddr) > 0 {
+		apiServerCfg := api.ServerConfig{
+			Logger:     opts.Logger,
+			ListenAddr: opts.APIListenAddr,
+		}
+		apiServer := api.NewServer(apiServerCfg, chain)
+
+		go func() {
+			if err := apiServer.Start(); err != nil {
+				panic(err)
+			}
+		}()
+
+		_ = opts.Logger.Log(
+			"msg", "JSON API server running",
+			"port", apiServerCfg.ListenAddr,
+		)
 	}
 
 	peerCh := make(chan *TCPPeer)
