@@ -12,8 +12,8 @@ type Signature struct {
 	S *big.Int
 }
 
-func (sig Signature) Verify(pubKey PublicKey, data []byte) bool {
-	x, y := elliptic.UnmarshalCompressed(elliptic.P256(), pubKey.Key)
+func (sig Signature) Verify(pk PublicKey, data []byte) bool {
+	x, y := elliptic.UnmarshalCompressed(elliptic.P256(), pk.Key)
 
 	key := &ecdsa.PublicKey{
 		Curve: elliptic.P256(),

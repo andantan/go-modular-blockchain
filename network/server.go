@@ -259,6 +259,48 @@ func (s *Server) broadcast(payload []byte) error {
 	return nil
 }
 
+func (s *Server) requestBlocksLoop(p net.Addr) error {
+	ticker := time.NewTicker(3 * time.Second)
+
+	for {
+		ourHeight := s.chain.Height()
+		_ = s.Logger.Log(
+			"msg", "requesting new blocks",
+			"requesting height", ourHeight+1,
+		)
+
+		buf := new(bytes.Buffer)
+		getBlockMessage := &GetBlocksMessage{
+			From: ourHeight + 1,
+			To:   0,
+		}
+
+		if err := gob.NewEncoder(buf).Encode(getBlockMessage); err != nil {
+			return nil
+		}
+
+		s.mu.RLock()
+		peer, ok := s.peerMap[p]
+		s.mu.RUnlock()
+
+		if !ok {
+			return fmt.Errorf("peer %s not known", peer.conn.RemoteAddr())
+		}
+
+		msg := NewMessage(MessageTypeGetBlocks, buf.Bytes())
+
+		if err := peer.Send(msg.Bytes()); err != nil {
+			_ = s.Logger.Log(
+				"msg", "failed to send to peer",
+				"err", err,
+				"peer", peer,
+			)
+		}
+
+		<-ticker.C
+	}
+}
+
 func (s *Server) processTransaction(tx *core.Transaction) error {
 	hash := tx.Hash(core.TxHasher{})
 
@@ -301,13 +343,13 @@ func (s *Server) processBlocksMessage(from net.Addr, data *BlocksMessage) error 
 	_ = s.Logger.Log(
 		"msg", "received BLOCKS!!!!!",
 		"from", from,
-		"data", fmt.Sprintf("%+v", data),
+		"data", fmt.Sprintf("%+v", data.Blocks),
 	)
 
 	for _, block := range data.Blocks {
-		fmt.Printf("BLOCK with %+v\n", block.Header)
 		if err := s.chain.AddBlock(block); err != nil {
-			return err
+			fmt.Printf("adding block error %s\n", err)
+			continue
 		}
 	}
 
@@ -324,7 +366,7 @@ func (s *Server) processGetBlocksMessage(from net.Addr, data *GetBlocksMessage) 
 
 	// means we need to return the whole shebang
 	if data.To == 0 {
-		for i := 0; i < int(ourHeight); i++ {
+		for i := int(data.From); i < int(ourHeight)+1; i++ {
 			b, err := s.chain.GetBlock(uint32(i))
 
 			if err != nil {
@@ -334,8 +376,6 @@ func (s *Server) processGetBlocksMessage(from net.Addr, data *GetBlocksMessage) 
 			blocks = append(blocks, b)
 		}
 	}
-
-	fmt.Printf("%+v\n", blocks[0].Header)
 
 	blocksMessage := &BlocksMessage{
 		Blocks: blocks,
@@ -379,28 +419,11 @@ func (s *Server) processStatusMessage(from net.Addr, data *StatusMessage) error 
 		return nil
 	}
 
-	getBlockMessage := &GetBlocksMessage{
-		From: s.chain.Height(),
-		To:   0,
-	}
-	buf := new(bytes.Buffer)
+	go func() {
+		_ = s.requestBlocksLoop(from)
+	}()
 
-	if err := gob.NewEncoder(buf).Encode(getBlockMessage); err != nil {
-		return nil
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	peer, ok := s.peerMap[from]
-
-	if !ok {
-		return fmt.Errorf("peer %s not known", peer.conn.RemoteAddr())
-	}
-
-	msg := NewMessage(MessageTypeGetBlocks, buf.Bytes())
-
-	return peer.Send(msg.Bytes())
+	return nil
 }
 
 func (s *Server) processGetStatusMessage(from net.Addr, data *GetStatusMessage) error {

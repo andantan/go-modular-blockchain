@@ -128,5 +128,12 @@ func GetGenesisBlock() *Block {
 		PrevBlockHash: types.Hash{},
 	}
 
-	return NewBlock(header, nil)
+	b := NewBlock(header, nil)
+	privKey := crypto.GeneratePrivateKey()
+
+	if err := b.Sign(privKey); err != nil {
+		panic(err)
+	}
+
+	return b
 }
