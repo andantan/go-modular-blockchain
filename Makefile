@@ -4,18 +4,20 @@ else
 	CLEAR_COMMAND = @clear
 endif
 
-test:
-	@go test ./...
 
-test-verbose:
-	@go test -v ./...
-
-test-race:
-	@go test ./... --race
+# Default Port number
+PORT ?= 4000
+SEEDS ?=
+BLOCK_DIR_NAME ?= blocks
+FLOOD ?= false
+PROPOSER ?= false
+ID ?=
+TESTER ?= false
 
 build:
 	@go build -o ./bin/blockchain
 
 run: build
 	@$(CLEAR_COMMAND)
-	./bin/blockchain
+	./bin/blockchain --port=$(PORT) --seeds=$(SEEDS) --id=$(ID) --tester=$(TESTER) --block-dir-name=$(BLOCK_DIR_NAME) --flood=$(FLOOD) --proposer=$(PROPOSER)
+

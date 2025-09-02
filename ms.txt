@@ -1,0 +1,23 @@
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=4000 ID=LOCAL_4000 FLOOD=true PROPOSER=true
+
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=5000 SEEDS=":4000" ID=LOCAL_5000
+
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=6000 SEEDS=":5000" ID=LOCAL_6000 TESTER=true
+
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=7000 SEEDS=":4000,:6000" ID=LOCAL_7000
+
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=8000 SEEDS=":5000,:6000,:7000" ID=LOCAL_8000 TESTER=true
+
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=9000 SEEDS=":5000,:8000" ID=LOCAL_9000
+
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=10000 SEEDS=":4000,:5000,:8000,:9000" FLOOD=true ID=LOCAL_10000 TESTER=true
+
+cd ..\..\Dev\extensible-modular-blockchain\
+make run PORT=11000 SEEDS=":5000,:6000,:8000,:10000" ID=LOCAL_11000

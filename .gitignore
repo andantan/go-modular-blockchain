@@ -1,4 +1,7 @@
 .env
 .idea
 
+*.txt
+
 /bin/
+/blocks_LOCAL_*/
