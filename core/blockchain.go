@@ -132,6 +132,14 @@ func (bc *Blockchain) HasBlock(height uint64) bool {
 	return height <= bc.Height()
 }
 
+func (bc *Blockchain) ClearHeader() {
+	bc.headers.Clear()
+}
+
+func (bc *Blockchain) ClearStorage() error {
+	return bc.fileStorage.ClearStorage()
+}
+
 func (bc *Blockchain) GetHeader(height uint64) (*Header, error) {
 	if bc.Height() < height {
 		return nil, fmt.Errorf("given height (%d) is too high", height)

@@ -14,6 +14,7 @@ type BlockStorage interface {
 	GetBlockByHash(types.Hash) (*Block, error)
 	GetBlockByHeight(uint64) (*Block, error)
 	CurrentHeight() uint64
+	ClearStorage() error
 }
 
 type DefaultBlockStorage struct {
@@ -137,4 +138,14 @@ func (fs *DefaultBlockStorage) CurrentHeight() uint64 {
 	}
 
 	return count - 1
+}
+
+func (fs *DefaultBlockStorage) ClearStorage() error {
+	if err := os.RemoveAll(fs.blocksDir); err != nil {
+		return err
+	}
+
+	fs.BlockHashCache = types.NewSyncMap[uint64, types.Hash]()
+
+	return os.MkdirAll(fs.blocksDir, os.ModePerm)
 }

@@ -171,8 +171,10 @@ type Server struct {
 
 	rawMessageCh chan RawMessage
 	peerCh       chan Peer
-	statCh       chan *ServerStatus
 	quitCh       chan struct{}
+
+	syncStatCh chan *ServerStatus
+	syncQuitCh chan struct{}
 }
 
 func NewServer(opts ServerOpts, chainParams ChainParameter) (*Server, error) {
@@ -224,8 +226,9 @@ func NewServer(opts ServerOpts, chainParams ChainParameter) (*Server, error) {
 		memPool:        core.NewMemPool(chainParams.MaxPoolSize),
 		rawMessageCh:   make(chan RawMessage),
 		peerCh:         peerCh,
-		statCh:         make(chan *ServerStatus),
 		quitCh:         make(chan struct{}),
+		syncStatCh:     nil,
+		syncQuitCh:     nil,
 	}
 
 	if opts.RawMessageDecodeFunc == nil {
@@ -257,10 +260,11 @@ func (s *Server) Start() error {
 
 	_ = s.Logger.Log("msg", "server started, listening on", "addr", s.ListenAddr)
 
+	go s.bootstrapNetwork()
+
 	s.setStatus(BlockchainStatusTypeSyncing)
 
-	go s.syncChain()
-	go s.bootstrapNetwork()
+	go s.syncChain(false)
 
 	if s.chain.IsProposer() {
 		go s.proposerLoop()
@@ -282,6 +286,20 @@ func (s *Server) setStatus(status BlockchainStatusType) {
 
 	s.status = status
 	_ = s.Logger.Log("msg", "status updated", "status", status.String())
+}
+
+func (s *Server) isOnline() bool {
+	s.statusLock.RLock()
+	defer s.statusLock.RUnlock()
+
+	return s.status == BlockchainStatusTypeOnline
+}
+
+func (s *Server) isSyncing() bool {
+	s.statusLock.RLock()
+	defer s.statusLock.RUnlock()
+
+	return s.status == BlockchainStatusTypeSyncing
 }
 
 func (s *Server) DefaultRawMessageDecodeFunc(rm RawMessage) (*DecodedMessage, error) {
@@ -465,7 +483,7 @@ frontier:
 			}
 
 			close(s.peerCh)
-			close(s.statCh)
+			close(s.syncStatCh)
 			close(s.rawMessageCh)
 
 			break frontier
@@ -473,31 +491,80 @@ frontier:
 	}
 }
 
-func (s *Server) syncChain() {
-	defer func() {
-		s.setStatus(BlockchainStatusTypeOnline)
-	}()
-
+func (s *Server) syncChain(fullSync bool) {
+	s.syncStatCh = make(chan *ServerStatus, 512)
+	s.syncQuitCh = make(chan struct{})
 	s.setStatus(BlockchainStatusTypeSyncing)
 
-	ticker := time.NewTicker(3 * time.Second)
-	statMap := make(map[net.Addr]*ServerStatus)
+	defer func() {
+		s.setStatus(BlockchainStatusTypeOnline)
+
+		close(s.syncStatCh)
+		close(s.syncQuitCh)
+
+		s.syncStatCh = nil
+		s.syncQuitCh = nil
+	}()
+
+	if !s.memPool.IsNilAll() {
+		s.memPool.ClearAll()
+	}
+
+	if !s.memPool.IsNilPending() {
+		s.memPool.ClearPending()
+	}
+
+	if fullSync {
+		_ = s.Logger.Log("msg", "full sync triggered, resetting local chain state")
+
+		s.chain.ClearHeader()
+
+		if err := s.chain.ClearStorage(); err != nil {
+			_ = s.Logger.Log("error", "failed to clear block storage", "err", err)
+			return
+		}
+
+		_ = s.chain.AddBlock(core.GetGenesisBlock())
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	onlineMap := make(map[net.Addr]*ServerStatus)
 
 sync:
 	for {
 		select {
-		case stat := <-s.statCh:
-			statMap[stat.Addr] = stat
+		case stat := <-s.syncStatCh:
+			_ = s.Logger.Log(
+				"msg", "received sync stat channel",
+				"addr", stat.Addr.String(),
+				"height", stat.Height,
+			)
+			if stat.Status == BlockchainStatusTypeOnline {
+				onlineMap[stat.Addr] = stat
+			}
 
 		case <-ticker.C:
+			_ = s.Logger.Log(
+				"msg", "synchronizing blockchain state",
+				"myHeight", s.chain.Height(),
+			)
+
 			if s.peerMap.Len() == 0 {
 				return
+			}
+
+			if len(onlineMap) == 0 {
+				if err := s.floodRequestStatus(); err != nil {
+					_ = s.Logger.Log("msg", "flood request status error", "error", err)
+				}
+
+				continue
 			}
 
 			highestHeight := uint64(0)
 			var highestStatus *ServerStatus
 
-			for _, stat := range statMap {
+			for _, stat := range onlineMap {
 				if highestHeight <= stat.Height {
 					highestHeight = stat.Height
 					highestStatus = stat
@@ -514,47 +581,46 @@ sync:
 				_ = s.requestBlocks(highestPeer, s.chain.Height()+1, highestHeight)
 			}
 
-			for _, stat := range statMap {
-				go func() {
-					peer, ok := s.peerMap.Get(stat.Addr)
-					fmt.Printf("%+v\n", peer)
-
-					if !ok {
-						return
-					}
-
-					req := new(RequestStatus)
-					buf := new(bytes.Buffer)
-
-					if err := gob.NewEncoder(buf).Encode(req); err != nil {
-						return
-					}
-
-					msg := NewMessage(MessageTypeReqStatus, buf.Bytes())
-
-					_ = peer.Send(msg.Bytes())
-
-					//if err := ; err != nil {
-					//	fmt.Println(err)
-					//	return
-					//}
-				}()
+			if err := s.floodRequestStatus(); err != nil {
+				_ = s.Logger.Log("msg", "flood request status error", "error", err)
 			}
+
+		case <-s.syncQuitCh:
+			_ = s.Logger.Log("msg", "shutting down sync channel")
+			break sync
 		}
 	}
 }
 
 func (s *Server) testFunc() {
-	testTicker := time.NewTicker(200 * time.Millisecond)
+	ticker := time.NewTicker(1 * time.Second)
 
 	for {
-		go func() {
-			key, _ := crypto.GeneratePrivateKey()
-			tx := core.NewTransaction([]byte("Hello world"))
-			_ = tx.Sign(key)
+		if s.isOnline() {
+			break
+		}
+		<-ticker.C
+	}
 
-			_ = s.broadcast(tx)
-		}()
+	ticker.Stop()
+
+	testTicker := time.NewTicker(1 * time.Second)
+
+	for {
+		if s.isOnline() {
+			go func() {
+				key, _ := crypto.GeneratePrivateKey()
+				tx := core.NewTransaction([]byte("Hello world"))
+				_ = tx.Sign(key)
+
+				_ = s.Logger.Log(
+					"msg", "broadcasting transaction",
+					"hash", tx.Hash(core.TxHasher{}).ShortString(8),
+				)
+
+				_ = s.broadcast(tx)
+			}()
+		}
 
 		<-testTicker.C
 	}
@@ -585,12 +651,26 @@ func (s *Server) broadcast(o any) error {
 
 func (s *Server) flood(payload []byte) error {
 	for _, peer := range s.peerMap.Iterator() {
-		go func() {
+		go func(peer Peer) {
 			_ = s.send(peer, payload)
-		}()
+		}(peer)
 	}
 
 	return nil
+}
+
+func (s *Server) floodRequestStatus() error {
+	req := new(RequestStatus)
+	buf := new(bytes.Buffer)
+
+	if err := gob.NewEncoder(buf).Encode(req); err != nil {
+		_ = s.Logger.Log("msg", "encode request error", "err", err)
+		return err
+	}
+
+	msg := NewMessage(MessageTypeReqStatus, buf.Bytes())
+
+	return s.flood(msg.Bytes())
 }
 
 func (s *Server) gossip(payload []byte) error {
@@ -692,15 +772,11 @@ func (s *Server) processNewPeer(peer Peer) error {
 		"total_peers", s.peerMap.Len(),
 	)
 
-	if err := s.responseStatus(peer); err != nil {
-		return err
-	}
-
 	return nil
 }
 
 func (s *Server) processTransaction(_ net.Addr, tx *core.Transaction) error {
-	if s.status == BlockchainStatusTypeOnline {
+	if s.isOnline() {
 		if s.memPool.Contains(tx) {
 			return nil
 		}
@@ -723,14 +799,53 @@ func (s *Server) processTransaction(_ net.Addr, tx *core.Transaction) error {
 
 func (s *Server) processBlock(_ net.Addr, block *core.Block) error {
 	if err := s.chain.AddBlock(block); err != nil {
-		if !errors.Is(err, core.ErrBlockKnown) {
-			return err
-		} else {
+		if errors.Is(err, core.ErrBlockKnown) {
 			return nil
 		}
+
+		if errors.Is(err, core.ErrFutureBlock) {
+			if s.isOnline() {
+				go s.syncChain(false)
+			}
+
+			return nil
+		}
+
+		if errors.Is(err, core.ErrUnknownParent) {
+			if s.isOnline() {
+				go s.syncChain(true)
+				return nil
+			}
+
+			if s.isSyncing() {
+				select {
+				case s.syncQuitCh <- struct{}{}:
+					_ = s.Logger.Log("msg", "fork detected during sync, cancelling current sync")
+				default:
+				}
+
+				go func() {
+					ticker := time.NewTicker(100 * time.Millisecond)
+
+					for {
+						if s.isOnline() {
+							break
+						}
+
+						<-ticker.C
+					}
+
+					s.syncChain(true)
+				}()
+
+			}
+			return nil
+		}
+
+		return err
 	}
 
-	if s.status == BlockchainStatusTypeOnline {
+	if s.isOnline() {
 		s.memPool.PrunePending(block.Transactions)
 
 		go func() {
@@ -754,19 +869,15 @@ func (s *Server) processRequestStatus(from net.Addr, _ *RequestStatus) error {
 }
 
 func (s *Server) processResponseStatus(from net.Addr, res *ResponseStatus) error {
-	if s.status == BlockchainStatusTypeSyncing {
+	if s.isSyncing() {
 		stat := &ServerStatus{
 			ResponseStatus: *res,
 			Addr:           from,
 		}
 
-		// select 문을 사용하여 비동기로 채널에 전송 시도
 		select {
-		case s.statCh <- stat:
-			// 성공적으로 전송됨
+		case s.syncStatCh <- stat:
 		default:
-			// statCh가 꽉 찼거나 받는 쪽이 준비 안 됨.
-			// 이 경우 메시지를 버리거나, 에러 로그를 남길 수 있습니다.
 			_ = s.Logger.Log("msg", "statCh is blocked, dropping status message", "from", from)
 		}
 
@@ -774,27 +885,8 @@ func (s *Server) processResponseStatus(from net.Addr, res *ResponseStatus) error
 	}
 
 	if s.chain.Height() < res.Height {
-		go s.syncChain()
+		go s.syncChain(false)
 	}
-
-	//genesisHeader, _ := s.chain.GetHeader(0)
-	//genesisBlockHash := core.BlockHasher{}.Hash(genesisHeader)
-	//
-	//if res.GenesisBlockHash != genesisBlockHash {
-	//	panic("invalid genesis block hash provided")
-	//}
-	//
-	//if s.chain.Height() < res.Height {
-	//	peer, ok := s.peerMap.Get(from)
-	//
-	//	if !ok {
-	//		return fmt.Errorf("peer (%s) not found", from.String())
-	//	}
-	//
-	//	if err := s.requestBlocks(peer, s.chain.Height()+1, res.Height); err != nil {
-	//		return err
-	//	}
-	//}
 
 	return nil
 }
@@ -854,7 +946,28 @@ func (s *Server) processRequestBlocks(from net.Addr, req *RequestBlocks) error {
 
 func (s *Server) processResponseBlocks(from net.Addr, res *ResponseBlocks) error {
 	for _, block := range res.Blocks {
-		_ = s.processBlock(from, block)
+		if err := s.processBlock(from, block); err != nil {
+			_ = s.Logger.Log("msg", "process-block-error", "recvH", block.Height, "error", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) requestStatus(peer Peer) error {
+	req := new(RequestStatus)
+	buf := new(bytes.Buffer)
+
+	if err := gob.NewEncoder(buf).Encode(req); err != nil {
+		_ = s.Logger.Log("msg", "message encode error", "error", err)
+		return err
+	}
+
+	msg := NewMessage(MessageTypeReqStatus, buf.Bytes())
+
+	if err := peer.Send(msg.Bytes()); err != nil {
+		_ = s.Logger.Log("msg", "message encode error", "error", err)
+		return err
 	}
 
 	return nil

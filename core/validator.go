@@ -2,7 +2,6 @@ package core
 
 import (
 	"errors"
-	"fmt"
 	"github.com/andantan/go-modular-blockchain/config"
 	"github.com/go-kit/log"
 )
@@ -52,7 +51,7 @@ func (bv *BlockValidator) ValidateBlock(b *Block) error {
 	prevHeaderHash := BlockHasher{}.Hash(prevHeader)
 
 	if prevHeaderHash != b.PrevBlockHash {
-		return fmt.Errorf("the hash of the previous block (%s) is invalid", b.PrevBlockHash)
+		return ErrUnknownParent
 	}
 
 	if err = b.Verify(); err != nil {

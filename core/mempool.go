@@ -34,6 +34,10 @@ func (mp *Mempool) Debug() {
 	)
 }
 
+func (mp *Mempool) IsNilAll() bool {
+	return mp.AllCount() == 0
+}
+
 func (mp *Mempool) IsNilPending() bool {
 	return mp.PendingCount() == 0
 }
@@ -61,12 +65,20 @@ func (mp *Mempool) Pending() []*Transaction {
 	return mp.pending.Values()
 }
 
+func (mp *Mempool) AllCount() int {
+	return mp.all.Count()
+}
+
 func (mp *Mempool) PendingCount() int {
 	return mp.pending.Count()
 }
 
 func (mp *Mempool) ClearPending() {
 	mp.pending.Clear()
+}
+
+func (mp *Mempool) ClearAll() {
+	mp.all.Clear()
 }
 
 func (mp *Mempool) PrunePending(txx []*Transaction) {
