@@ -36,6 +36,19 @@ func (sm *SyncMap[K, V]) Exists(k K) bool {
 	return ok
 }
 
+func (sm *SyncMap[K, V]) PutIfNotExists(k K, v V) bool {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+
+	if _, ok := sm.m[k]; ok {
+		return false
+	}
+
+	sm.m[k] = v
+
+	return true
+}
+
 func (sm *SyncMap[K, V]) Len() int {
 	sm.lock.RLock()
 	defer sm.lock.RUnlock()

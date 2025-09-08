@@ -7,24 +7,27 @@ import (
 	"github.com/andantan/go-modular-blockchain/types"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
-type BlockStorage interface {
+type BlockStorer interface {
 	StoreBlock(*Block) error
 	GetBlockByHash(types.Hash) (*Block, error)
 	GetBlockByHeight(uint64) (*Block, error)
 	CurrentHeight() uint64
+	RemoveBlock(types.Hash) error
 	ClearStorage() error
 }
 
-type DefaultBlockStorage struct {
+type DefaultBlockStorer struct {
 	blocksDir      string
 	marker         uint64
+	ioLock         sync.RWMutex
 	BlockHashCache *types.SyncMap[uint64, types.Hash]
 }
 
-func NewDefaultBlockStorage(blocksDir string) (*DefaultBlockStorage, error) {
-	fs := &DefaultBlockStorage{
+func NewDefaultBlockStorage(blocksDir string) (*DefaultBlockStorer, error) {
+	fs := &DefaultBlockStorer{
 		blocksDir:      blocksDir,
 		marker:         0,
 		BlockHashCache: types.NewSyncMap[uint64, types.Hash](),
@@ -41,8 +44,9 @@ func NewDefaultBlockStorage(blocksDir string) (*DefaultBlockStorage, error) {
 	return fs, nil
 }
 
-func (fs *DefaultBlockStorage) bootstrap() error {
+func (fs *DefaultBlockStorer) bootstrap() error {
 	files, err := os.ReadDir(fs.blocksDir)
+
 	if err != nil {
 		return err
 	}
@@ -82,7 +86,7 @@ func (fs *DefaultBlockStorage) bootstrap() error {
 	return nil
 }
 
-func (fs *DefaultBlockStorage) StoreBlock(block *Block) error {
+func (fs *DefaultBlockStorer) StoreBlock(block *Block) error {
 	buf := new(bytes.Buffer)
 	if err := block.Encode(NewGobBlockEncoder(buf)); err != nil {
 		return err
@@ -92,7 +96,12 @@ func (fs *DefaultBlockStorage) StoreBlock(block *Block) error {
 	fileName := hex.EncodeToString(blockHash.Bytes())
 	filePath := filepath.Join(fs.blocksDir, fileName)
 
-	if err := os.WriteFile(filePath, buf.Bytes(), os.ModePerm); err != nil {
+	fs.ioLock.Lock()
+	defer fs.ioLock.Unlock()
+
+	err := os.WriteFile(filePath, buf.Bytes(), os.ModePerm)
+
+	if err != nil {
 		return err
 	}
 
@@ -101,9 +110,12 @@ func (fs *DefaultBlockStorage) StoreBlock(block *Block) error {
 	return nil
 }
 
-func (fs *DefaultBlockStorage) GetBlockByHash(hash types.Hash) (*Block, error) {
+func (fs *DefaultBlockStorer) GetBlockByHash(hash types.Hash) (*Block, error) {
 	fileName := hex.EncodeToString(hash.Bytes())
 	filePath := filepath.Join(fs.blocksDir, fileName)
+
+	fs.ioLock.RLock()
+	defer fs.ioLock.RUnlock()
 
 	data, err := os.ReadFile(filePath)
 
@@ -113,14 +125,14 @@ func (fs *DefaultBlockStorage) GetBlockByHash(hash types.Hash) (*Block, error) {
 
 	block := new(Block)
 
-	if err := block.UnMarshall(bytes.NewReader(data)); err != nil {
+	if err = block.UnMarshall(bytes.NewReader(data)); err != nil {
 		return nil, err
 	}
 
 	return block, nil
 }
 
-func (fs *DefaultBlockStorage) GetBlockByHeight(height uint64) (*Block, error) {
+func (fs *DefaultBlockStorer) GetBlockByHeight(height uint64) (*Block, error) {
 	hash, ok := fs.BlockHashCache.Get(height)
 
 	if !ok {
@@ -130,7 +142,7 @@ func (fs *DefaultBlockStorage) GetBlockByHeight(height uint64) (*Block, error) {
 	return fs.GetBlockByHash(hash)
 }
 
-func (fs *DefaultBlockStorage) CurrentHeight() uint64 {
+func (fs *DefaultBlockStorer) CurrentHeight() uint64 {
 	count := uint64(fs.BlockHashCache.Len())
 
 	if count == 0 {
@@ -140,7 +152,25 @@ func (fs *DefaultBlockStorage) CurrentHeight() uint64 {
 	return count - 1
 }
 
-func (fs *DefaultBlockStorage) ClearStorage() error {
+func (fs *DefaultBlockStorer) RemoveBlock(hash types.Hash) error {
+	fs.ioLock.Lock()
+	defer fs.ioLock.Unlock()
+
+	fileName := hex.EncodeToString(hash.Bytes())
+	filePath := filepath.Join(fs.blocksDir, fileName)
+	err := os.Remove(filePath)
+
+	if os.IsNotExist(err) {
+		return nil
+	}
+
+	return err
+}
+
+func (fs *DefaultBlockStorer) ClearStorage() error {
+	fs.ioLock.Lock()
+	defer fs.ioLock.Unlock()
+
 	if err := os.RemoveAll(fs.blocksDir); err != nil {
 		return err
 	}

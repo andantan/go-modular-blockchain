@@ -8,7 +8,7 @@ import (
 
 var ErrBlockKnown = errors.New("block already known")
 var ErrFutureBlock = errors.New("block is too high")
-var ErrUnknownParent = errors.New("chain is abnormal")
+var ErrUnknownParent = errors.New("chain has been forked")
 
 type Validator interface {
 	ValidateBlock(*Block) error

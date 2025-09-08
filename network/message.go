@@ -12,13 +12,38 @@ import (
 type MessageType byte
 
 const (
-	MessageTypeNewTx     MessageType = 0x01
-	MessageTypeNewBlock  MessageType = 0x02
-	MessageTypeReqStatus MessageType = 0x03
-	MessageTypeResStatus MessageType = 0x04
-	MessageTypeReqBlock  MessageType = 0x05
-	MessageTypeResBlock  MessageType = 0x06
+	MessageTypeNewTx MessageType = iota
+	MessageTypeNewBlock
+	MessageTypeReqStatus
+	MessageTypeResStatus
+	MessageTypeReqHeaders
+	MessageTypeResHeaders
+	MessageTypeReqBlocks
+	MessageTypeResBlocks
 )
+
+func (mt MessageType) String() string {
+	switch mt {
+	case MessageTypeNewTx:
+		return "NewTx"
+	case MessageTypeNewBlock:
+		return "NewBlock"
+	case MessageTypeReqStatus:
+		return "ReqStatus"
+	case MessageTypeResStatus:
+		return "ResStatus"
+	case MessageTypeReqHeaders:
+		return "ReqHeaders"
+	case MessageTypeResHeaders:
+		return "ResHeaders"
+	case MessageTypeReqBlocks:
+		return "ReqBlocks"
+	case MessageTypeResBlocks:
+		return "ResBlocks"
+	default:
+		return "Unknown"
+	}
+}
 
 type RawMessage struct {
 	From    net.Addr
@@ -63,10 +88,18 @@ type ResponseStatus struct {
 	CurrentBlockHash types.Hash
 }
 
+type RequestHeaders struct {
+	From  uint64
+	Count uint64
+}
+
+type ResponseHeaders struct {
+	Headers []*core.Header
+}
+
 type RequestBlocks struct {
-	From      uint64
-	To        uint64
-	BatchSize uint64
+	From  uint64
+	Count uint64
 }
 
 type ResponseBlocks struct {

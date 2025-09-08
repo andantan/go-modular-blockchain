@@ -19,34 +19,31 @@ type BlockProposer struct {
 	privKey crypto.PrivateKey
 }
 
-func NewBlockPropoesr(chain *Blockchain, mempool *Mempool, privKey crypto.PrivateKey) *BlockProposer {
-	logger := config.LoggerWithPrefixes("PROPOSER")
-
+func NewBlockPropoesr(bc *Blockchain, m *Mempool, pk crypto.PrivateKey) *BlockProposer {
 	return &BlockProposer{
-		Logger:  logger,
-		chain:   chain,
-		mempool: mempool,
-		privKey: privKey,
+		Logger:  config.LoggerWithPrefixes("PROPOSER"),
+		chain:   bc,
+		mempool: m,
+		privKey: pk,
 	}
 }
 
-func (bp *BlockProposer) CreateBlock() (*Block, error) {
-	prevHeader, err := bp.chain.GetHeader(bp.chain.Height())
+func (bp *BlockProposer) CreateBlock() (b *Block, err error) {
+	var prevHeader *Header
 
-	if err != nil {
-		return nil, err
+	if prevHeader, err = bp.chain.GetHeader(bp.chain.Height()); err != nil {
+		return
 	}
 
 	txx := bp.mempool.Pending()
-	block, err := NewBlockFromPrevHeader(prevHeader, txx)
 
-	if err != nil {
-		return nil, err
+	if b, err = NewBlockFromPrevHeader(prevHeader, txx); err != nil {
+		return
 	}
 
-	if err := block.Sign(bp.privKey); err != nil {
-		return nil, err
+	if err = b.Sign(bp.privKey); err != nil {
+		return
 	}
 
-	return block, nil
+	return
 }

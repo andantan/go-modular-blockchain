@@ -3,6 +3,7 @@ package network
 import (
 	"errors"
 	"github.com/andantan/go-modular-blockchain/config"
+	"github.com/andantan/go-modular-blockchain/types"
 	"github.com/go-kit/log"
 	"net"
 )
@@ -10,23 +11,38 @@ import (
 type Node interface {
 	Listen() error
 	Connect(addr string) error
+	Remove(peer Peer)
 	Stop() error
 }
 
 type TCPNode struct {
-	PeerCh     chan Peer
-	Logger     log.Logger
+	Logger log.Logger
+
+	ID         string
 	ListenAddr string
 	Listener   net.Listener
+
+	MessageCh  chan RawMessage
+	NewPeerCh  chan Peer
+	DelPeerCh  chan Peer
+	KnownPeers *types.SyncMap[string, struct{}]
 }
 
-func NewTCPNode(addr string, ch chan Peer) *TCPNode {
-	logger := config.LoggerWithPrefixes("TCPNODE", "LISTEN-ADDRESS", addr)
-
+func NewTCPNode(
+	id string,
+	addr string,
+	msgCh chan RawMessage,
+	newPeerCh chan Peer,
+	delPeerCh chan Peer,
+) *TCPNode {
 	return &TCPNode{
-		PeerCh:     ch,
-		Logger:     logger,
+		Logger:     config.LoggerWithPrefixes("node", "id", id, "listen-addr", addr),
+		ID:         id,
 		ListenAddr: addr,
+		MessageCh:  msgCh,
+		NewPeerCh:  newPeerCh,
+		DelPeerCh:  delPeerCh,
+		KnownPeers: types.NewSyncMap[string, struct{}](),
 	}
 }
 
@@ -37,9 +53,8 @@ func (t *TCPNode) WithLogger(logger log.Logger) *TCPNode {
 }
 
 func (t *TCPNode) Listen() error {
-	_ = t.Logger.Log("msg", "bootstrap TCP node", "listenAddr", t.ListenAddr)
-
 	ln, err := net.Listen("tcp", t.ListenAddr)
+	_ = t.Logger.Log("event", "TCP_listening")
 
 	if err != nil {
 		return err
@@ -53,31 +68,27 @@ func (t *TCPNode) Listen() error {
 }
 
 func (t *TCPNode) acceptLoop() {
-	_ = t.Logger.Log("msg", "accepting TCP connection on", "listenAddr", t.ListenAddr)
+	_ = t.Logger.Log("event", "accepting_TCP_connection")
 
 	for {
 		conn, err := t.Listener.Accept()
 
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				_ = t.Logger.Log("msg", "listener closed, terminating accept loop")
+				_ = t.Logger.Log("event", "closed_listener", "peer", conn.RemoteAddr().String())
 				return
 			}
 
-			_ = t.Logger.Log("error", "accept error", "msg", err)
+			_ = t.Logger.Log("event", "accept_error", "error", err)
 			continue
 		}
 
-		peer := NewTCPPeer(conn)
-
-		_ = t.Logger.Log("msg", "accept new peer connection", "from", peer.Who())
-
-		t.PeerCh <- peer
+		go t.handshakeAndValidate(conn)
 	}
 }
 
 func (t *TCPNode) Connect(addr string) error {
-	_ = t.Logger.Log("msg", "attempting to connect to seed", "to", addr)
+	_ = t.Logger.Log("event", "attempting_connect", "to", addr)
 
 	conn, err := net.Dial("tcp", addr)
 
@@ -85,15 +96,41 @@ func (t *TCPNode) Connect(addr string) error {
 		return err
 	}
 
-	peer := NewTCPPeer(conn)
-
-	t.PeerCh <- peer
+	go t.handshakeAndValidate(conn)
 
 	return nil
 }
 
+func (t *TCPNode) Remove(peer Peer) {
+	t.KnownPeers.Remove(peer.ID())
+}
+
 func (t *TCPNode) Stop() error {
-	_ = t.Logger.Log("msg", "shutting down TCP node")
+	_ = t.Logger.Log("event", "shutdown")
 
 	return t.Listener.Close()
+}
+
+func (t *TCPNode) handshakeAndValidate(conn net.Conn) {
+	peer := NewTCPPeer(conn, t.MessageCh, t.DelPeerCh)
+	remoteID, err := peer.handshake(t.ID)
+
+	if err != nil {
+		_ = t.Logger.Log("event", "handshake_fail", "error", err)
+		return
+	}
+
+	if !t.KnownPeers.PutIfNotExists(remoteID, struct{}{}) {
+		// tie-breaking
+		isInbound := conn.LocalAddr() == t.Listener.Addr()
+		if isInbound && t.ID > remoteID {
+			_ = t.Logger.Log("msg", "tie-breaking: dropping inbound from lower ID peer")
+			_ = peer.Conn.Close()
+		}
+		return
+	}
+
+	_ = t.Logger.Log("msg", "new peer connection sending to channel", "peer-id", remoteID, "peer-addr", peer.Addr())
+
+	t.NewPeerCh <- peer
 }

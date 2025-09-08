@@ -19,5 +19,5 @@ build:
 
 run: build
 	@$(CLEAR_COMMAND)
-	./bin/blockchain --port=$(PORT) --seeds=$(SEEDS) --id=$(ID) --tester=$(TESTER) --block-dir-name=$(BLOCK_DIR_NAME) --flood=$(FLOOD) --proposer=$(PROPOSER)
+	./bin/blockchain --port=$(PORT) --id=$(ID) --tester=$(TESTER) --block-dir-name=$(BLOCK_DIR_NAME) --flood=$(FLOOD) --proposer=$(PROPOSER)
 

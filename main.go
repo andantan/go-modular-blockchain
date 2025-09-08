@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/network"
-	"strings"
 	"time"
 )
 
 func main() {
 	port := flag.String("port", "4000", "the port for the server to listen on")
-	seeds := flag.String("seeds", "", "comma separated list of seed nodes to connect to")
 	id := flag.String("id", "DEFAULT", "server identifier to use")
 	blockDirName := flag.String("block-dir-name", "", "directory to store blocks (not path) in")
 	flood := flag.Bool("flood", false, "enable flooding mode")
@@ -20,22 +18,14 @@ func main() {
 
 	flag.Parse()
 
-	listenAddr := fmt.Sprintf(":%s", *port)
+	listenAddr := fmt.Sprintf("127.0.0.1:%s", *port)
 	storeDir := fmt.Sprintf("%s_%s", *blockDirName, *id)
-	params := network.NewChainParameter(10*time.Second, 2<<10)
+	params := network.NewChainParameter(30*time.Second, 2<<10)
 
 	opts := network.NewServerOpts(*id, listenAddr)
 	opts = opts.WithBlockDir(storeDir)
-
-	if *seeds != "" {
-		seedList := strings.Split(*seeds, ",")
-
-		for _, seed := range seedList {
-			seed = strings.TrimSpace(seed)
-		}
-
-		opts = opts.WithSeeds(seedList)
-	}
+	opts = opts.WithDNS(network.NewDefaultPeerDNS("127.0.0.1:6550"))
+	opts = opts.WithFlooding()
 
 	if *tester {
 		opts = opts.WithTester()

@@ -18,21 +18,22 @@ func (e *BlockSyncingError) Error() string {
 
 type Blockchain struct {
 	Logger      log.Logger
-	fileStorage BlockStorage
+	fileStorage BlockStorer
 
-	headers *types.SyncList[*Header]
-	version uint16
+	headers      *types.SyncList[*Header]
+	headersStore *types.SyncMap[types.Hash, *Header]
+	version      uint16
 
 	validator Validator
-	proposer  Proposer
 	contract  Contract
 }
 
 func NewBlockchain(blockDir string) (*Blockchain, error) {
 	bc := &Blockchain{
-		Logger:  config.LoggerWithPrefixes("BLOCKCHAIN"),
-		headers: types.NewSyncList[*Header](),
-		version: 1,
+		Logger:       config.LoggerWithPrefixes("blockchain"),
+		headers:      types.NewSyncList[*Header](),
+		headersStore: types.NewSyncMap[types.Hash, *Header](),
+		version:      1,
 	}
 
 	if bc.fileStorage == nil {
@@ -62,7 +63,7 @@ func (bc *Blockchain) WithLogger(logger log.Logger) *Blockchain {
 	return bc
 }
 
-func (bc *Blockchain) WithBlockStore(store BlockStorage) *Blockchain {
+func (bc *Blockchain) WithBlockStore(store BlockStorer) *Blockchain {
 	bc.fileStorage = store
 	return bc
 }
@@ -72,14 +73,13 @@ func (bc *Blockchain) WithValidator(validator Validator) *Blockchain {
 	return bc
 }
 
-func (bc *Blockchain) WithProposer(proposer Proposer) *Blockchain {
-	bc.proposer = proposer
-	return bc
-}
-
 func (bc *Blockchain) WithContract(contract Contract) *Blockchain {
 	bc.contract = contract
 	return bc
+}
+
+func (bc *Blockchain) IsValidator() bool {
+	return bc.validator != nil
 }
 
 func (bc *Blockchain) Height() uint64 {
@@ -90,20 +90,12 @@ func (bc *Blockchain) Version() uint16 {
 	return bc.version
 }
 
-func (bc *Blockchain) IsValidator() bool {
-	return bc.validator != nil
-}
+func (bc *Blockchain) AddHeader(h *Header) error {
+	bc.headers.Insert(h)
+	bc.headersStore.Put(BlockHasher{}.Hash(h), h)
+	bc.version = h.Version
 
-func (bc *Blockchain) IsProposer() bool {
-	return bc.proposer != nil
-}
-
-func (bc *Blockchain) ValidateBlock(b *Block) error {
-	return bc.validator.ValidateBlock(b)
-}
-
-func (bc *Blockchain) CreateBlock() (*Block, error) {
-	return bc.proposer.CreateBlock()
+	return nil
 }
 
 func (bc *Blockchain) AddBlock(b *Block) error {
@@ -126,6 +118,10 @@ func (bc *Blockchain) AddBlock(b *Block) error {
 	}
 
 	return bc.commitBlock(b)
+}
+
+func (bc *Blockchain) HasHeader(h types.Hash) bool {
+	return bc.headersStore.Exists(h)
 }
 
 func (bc *Blockchain) HasBlock(height uint64) bool {
@@ -154,8 +150,41 @@ func (bc *Blockchain) GetHeader(height uint64) (*Header, error) {
 	return h, nil
 }
 
-func (bc *Blockchain) GetBlockByHeight(height uint64) (*Block, error) {
+func (bc *Blockchain) GetBlock(height uint64) (*Block, error) {
 	return bc.fileStorage.GetBlockByHeight(height)
+}
+
+func (bc *Blockchain) Rollback(height uint64) error {
+	currentHeight := bc.Height()
+
+	if height >= currentHeight {
+		return nil
+	}
+
+	_ = bc.Logger.Log("msg", "rolling back chain", "from_height", currentHeight, "to_height", height)
+
+	for i := currentHeight; i > height; i-- {
+		header, err := bc.GetHeader(i)
+
+		if err != nil {
+			return err
+		}
+
+		hash := BlockHasher{}.Hash(header)
+
+		bc.headers.Remove(header)
+		bc.headersStore.Remove(hash)
+
+		if err = bc.fileStorage.RemoveBlock(hash); err != nil {
+			_ = bc.Logger.Log(
+				"error", "failed to remove block from storage",
+				"height", i,
+				"err", err,
+			)
+		}
+	}
+
+	return nil
 }
 
 func (bc *Blockchain) loadBlocks() error {
@@ -183,11 +212,7 @@ func (bc *Blockchain) loadBlocks() error {
 
 		bc.headers.Insert(block.Header)
 
-		_ = bc.Logger.Log(
-			"msg", "loaded block",
-			"height", height,
-			"hash", block.BlockHash.String(),
-		)
+		_ = bc.Logger.Log("msg", "loaded block", "height", height, "hash", block.BlockHash.String())
 
 		height++
 	}
@@ -196,10 +221,18 @@ func (bc *Blockchain) loadBlocks() error {
 }
 
 func (bc *Blockchain) commitBlock(b *Block) error {
-	bc.headers.Insert(b.Header)
-	bc.version = b.Version
+	if err := bc.AddHeader(b.Header); err != nil {
+		return err
+	}
 
-	b.Debug(false, false)
+	// b.Debug(false, false)
+
+	_ = bc.Logger.Log(
+		"msg", "new block committed",
+		"hash", b.Hash(BlockHasher{}).ShortString(8),
+		"height", b.Height,
+		"weight", b.Weight,
+	)
 
 	return bc.fileStorage.StoreBlock(b)
 }
