@@ -16,7 +16,6 @@ func NewSyncMap[K comparable, V any]() *SyncMap[K, V] {
 func (sm *SyncMap[K, V]) Get(k K) (V, bool) {
 	sm.lock.RLock()
 	defer sm.lock.RUnlock()
-
 	val, ok := sm.m[k]
 	return val, ok
 }
@@ -24,14 +23,12 @@ func (sm *SyncMap[K, V]) Get(k K) (V, bool) {
 func (sm *SyncMap[K, V]) Put(k K, v V) {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
-
 	sm.m[k] = v
 }
 
 func (sm *SyncMap[K, V]) Exists(k K) bool {
 	sm.lock.RLock()
 	defer sm.lock.RUnlock()
-
 	_, ok := sm.m[k]
 	return ok
 }
@@ -52,15 +49,19 @@ func (sm *SyncMap[K, V]) PutIfNotExists(k K, v V) bool {
 func (sm *SyncMap[K, V]) Len() int {
 	sm.lock.RLock()
 	defer sm.lock.RUnlock()
-
 	return len(sm.m)
 }
 
 func (sm *SyncMap[K, V]) Remove(k K) {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
-
 	delete(sm.m, k)
+}
+
+func (sm *SyncMap[K, V]) Clear() {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+	sm.m = make(map[K]V)
 }
 
 func (sm *SyncMap[K, V]) Keys() []K {

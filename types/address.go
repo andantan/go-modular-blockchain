@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -19,18 +20,26 @@ func (a Address) ToSlice() []byte {
 	return b
 }
 
-func (a Address) String() string {
-	return hex.EncodeToString(a.ToSlice())
+func (a Address) Bytes() []byte {
+	b := make([]byte, AddressLength)
+
+	copy(b[:], a[:])
+
+	return b
 }
 
-func (a Address) ShortString(n int) string {
-	fullHash := a.String()
+func (a Address) String() string {
+	return "0x" + hex.EncodeToString(a.ToSlice())
+}
 
-	if n > len(fullHash) {
-		return fullHash
+func (a Address) ShortString(length int) string {
+	addressStr := hex.EncodeToString(a.ToSlice())
+
+	if length > len(addressStr) {
+		length = len(addressStr)
 	}
 
-	return fullHash[:n]
+	return "0x" + addressStr[:length]
 }
 
 func AddressFromBytes(b []byte) (Address, error) {
@@ -43,4 +52,24 @@ func AddressFromBytes(b []byte) (Address, error) {
 	copy(h[:], b[:])
 
 	return h, nil
+}
+
+func AddressFromHexString(s string) (Address, error) {
+	if strings.HasPrefix(s, "0x") {
+		s = s[2:]
+	}
+
+	if len(s) != AddressLength*2 {
+		return Address{}, fmt.Errorf("invalid hex string length (%d), must be %d", len(s), AddressLength*2)
+	}
+
+	addrBytes, err := hex.DecodeString(s)
+	if err != nil {
+		return Address{}, err
+	}
+
+	var addr Address
+	copy(addr[:], addrBytes)
+
+	return addr, nil
 }

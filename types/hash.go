@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -11,7 +12,7 @@ const (
 
 type Hash [HashLength]uint8
 
-func (h Hash) Bytes() []byte {
+func (h Hash) ToSlice() []byte {
 	b := make([]byte, HashLength)
 
 	copy(b[:], h[:])
@@ -24,17 +25,17 @@ func (h Hash) IsZero() bool {
 }
 
 func (h Hash) String() string {
-	return hex.EncodeToString(h.Bytes())
+	return "0x" + hex.EncodeToString(h.ToSlice())
 }
 
-func (h Hash) ShortString(n int) string {
-	fullHash := h.String()
+func (h Hash) ShortString(length int) string {
+	hashStr := hex.EncodeToString(h.ToSlice())
 
-	if n > len(fullHash) {
-		return fullHash
+	if length > len(hashStr) {
+		length = len(hashStr)
 	}
 
-	return fullHash[:n]
+	return "0x" + hashStr[:length]
 }
 
 func HashFromBytes(b []byte) (Hash, error) {
@@ -45,6 +46,26 @@ func HashFromBytes(b []byte) (Hash, error) {
 	var h Hash
 
 	copy(h[:], b[:])
+
+	return h, nil
+}
+
+func HashFromHexString(s string) (Hash, error) {
+	if strings.HasPrefix(s, "0x") {
+		s = s[2:]
+	}
+
+	if len(s) != HashLength*2 {
+		return Hash{}, fmt.Errorf("invalid hex string length (%d), must be %d", len(s), HashLength*2)
+	}
+
+	hashBytes, err := hex.DecodeString(s)
+	if err != nil {
+		return Hash{}, err
+	}
+
+	var h Hash
+	copy(h[:], hashBytes)
 
 	return h, nil
 }

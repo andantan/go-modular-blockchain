@@ -11,7 +11,6 @@ import (
 	"github.com/andantan/go-modular-blockchain/types"
 	"github.com/go-kit/log"
 	"math/rand"
-	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -39,30 +38,30 @@ func NewChainParameter(BlockTime time.Duration, MaxPoolSize int) *ChainParameter
 	}
 }
 
-type BlockchainStatusType byte
+type ServerStatusType byte
 
 const (
-	BlockchainStatusTypeBootstrap BlockchainStatusType = iota
-	BlockchainStatusTypeSyncing
-	BlockchainStatusTypeOnline
-	BlockchainStatusTypeForked
-	BlockchainStatusTypeInConsensus
-	BlockchainStatusTypeOffline
+	ServerStatusTypeBootstrap ServerStatusType = iota
+	ServerStatusTypeSyncing
+	ServerStatusTypeOnline
+	ServerStatusTypeForked
+	ServerStatusTypeInConsensus
+	ServerStatusTypeOffline
 )
 
-func (s BlockchainStatusType) String() string {
+func (s ServerStatusType) String() string {
 	switch s {
-	case BlockchainStatusTypeBootstrap:
+	case ServerStatusTypeBootstrap:
 		return "BOOTSTRAP"
-	case BlockchainStatusTypeSyncing:
+	case ServerStatusTypeSyncing:
 		return "SYNCING"
-	case BlockchainStatusTypeOnline:
+	case ServerStatusTypeOnline:
 		return "ONLINE"
-	case BlockchainStatusTypeForked:
+	case ServerStatusTypeForked:
 		return "FORKED"
-	case BlockchainStatusTypeInConsensus:
+	case ServerStatusTypeInConsensus:
 		return "IN_CONSENSUS"
-	case BlockchainStatusTypeOffline:
+	case ServerStatusTypeOffline:
 		return "OFFLINE"
 	default:
 		return "UNKNOWN"
@@ -70,52 +69,46 @@ func (s BlockchainStatusType) String() string {
 }
 
 type ServerStatus struct {
-	ID               string
-	ListenAddr       string
-	Status           BlockchainStatusType
+	Address          types.Address
+	NetAddr          string
+	Status           ServerStatusType
 	Height           uint64
 	GenesisBlockHash types.Hash
 	CurrentBlockHash types.Hash
 }
 
 type ServerOpts struct {
-	Logger log.Logger
+	logger log.Logger
 
-	ID         string
-	ListenAddr string
+	listenAddr string
+	domain     string
 
-	DNS          PeerDNS
-	Seeds        []string
-	MaxPeers     int
-	Flooding     bool
-	GossipFactor int
+	dns          PeerDNS
+	maxPeers     int
+	flooding     bool
+	gossipFactor int
 
-	Tester   bool
-	BlockDir string
+	tester   bool
+	blockDir string
 
-	RawMessageDecodeFunc RawMessageDecodeFunc
-	MessageProcessFunc   MessageProcessFunc
+	rawMessageDecodeFunc RawMessageDecodeFunc
+	messageProcessFunc   MessageProcessFunc
 }
 
-func NewServerOpts(ID string, ListenAddr string) *ServerOpts {
+func NewServerOpts(ListenAddr string, domain string) *ServerOpts {
 	return &ServerOpts{
-		ID:         ID,
-		ListenAddr: ListenAddr,
+		listenAddr: ListenAddr,
+		domain:     domain,
 	}
 }
 
 func (opts *ServerOpts) WithLogger(logger log.Logger) *ServerOpts {
-	opts.Logger = logger
+	opts.logger = logger
 	return opts
 }
 
 func (opts *ServerOpts) WithDNS(dns PeerDNS) *ServerOpts {
-	opts.DNS = dns
-	return opts
-}
-
-func (opts *ServerOpts) WithSeeds(seeds []string) *ServerOpts {
-	opts.Seeds = seeds
+	opts.dns = dns
 	return opts
 }
 
@@ -124,12 +117,12 @@ func (opts *ServerOpts) WithMaxPeers(maxPeers int) *ServerOpts {
 		panic("MaxPeers must be greater than 0")
 	}
 
-	opts.MaxPeers = maxPeers
+	opts.maxPeers = maxPeers
 	return opts
 }
 
 func (opts *ServerOpts) WithFlooding() *ServerOpts {
-	opts.Flooding = true
+	opts.flooding = true
 	return opts
 }
 
@@ -138,12 +131,12 @@ func (opts *ServerOpts) WithGossipFactor(factor int) *ServerOpts {
 		panic("factor must be greater than 0")
 	}
 
-	opts.GossipFactor = factor
+	opts.gossipFactor = factor
 	return opts
 }
 
 func (opts *ServerOpts) WithTester() *ServerOpts {
-	opts.Tester = true
+	opts.tester = true
 	return opts
 }
 
@@ -152,16 +145,16 @@ func (opts *ServerOpts) WithBlockDir(blockDir string) *ServerOpts {
 		panic("BlockDir must not be equal \"\"")
 	}
 
-	opts.BlockDir = blockDir
+	opts.blockDir = blockDir
 	return opts
 }
 
 func (opts *ServerOpts) WithRawMessageDecodeFunc(f RawMessageDecodeFunc) *ServerOpts {
-	if opts.RawMessageDecodeFunc == nil {
+	if opts.rawMessageDecodeFunc == nil {
 		panic("nil RawMessageDecodeFunc")
 	}
 
-	opts.RawMessageDecodeFunc = f
+	opts.rawMessageDecodeFunc = f
 
 	return opts
 }
@@ -171,7 +164,7 @@ func (opts *ServerOpts) WithDecodedMessageProcessFunc(p MessageProcessFunc) *Ser
 		panic("nil DecodedMessageProcessor")
 	}
 
-	opts.MessageProcessFunc = p
+	opts.messageProcessFunc = p
 
 	return opts
 }
@@ -180,15 +173,24 @@ type Server struct {
 	ServerOpts
 	ChainParameter
 
+	privKey crypto.PrivateKey
+	pubKey  crypto.PublicKey
+	address types.Address
+
 	node    Node
-	peerMap *types.SyncMap[string, Peer]
+	peerMap *types.SyncMap[types.Address, Peer]
+	status  *types.AtomicNumber[ServerStatusType]
 
-	chain    *core.Blockchain
-	memPool  *core.Mempool
-	proposer core.Proposer
+	validatorSet     *types.SyncSet[types.Address]
+	consensusEngines *types.SyncMap[uint64, PBFTConsensusEngine]
 
-	statusLock sync.RWMutex
-	status     BlockchainStatusType
+	chain   *core.Blockchain
+	memPool *core.Mempool
+
+	broadcaster Broadcaster
+	processor   core.Processor
+	validator   core.Validator
+	proposer    core.Proposer
 
 	rawMessageCh chan RawMessage
 	newPeerCh    chan Peer
@@ -199,7 +201,7 @@ type Server struct {
 	syncQuitCh chan struct{}
 }
 
-func NewServer(opts ServerOpts, chainParams ChainParameter) (*Server, error) {
+func NewServer(opts ServerOpts, chainParams ChainParameter, privKey crypto.PrivateKey) (*Server, error) {
 	if chainParams.MaxPoolSize <= 0 {
 		panic("MaxPoolSize must be greater than zero")
 	}
@@ -208,27 +210,33 @@ func NewServer(opts ServerOpts, chainParams ChainParameter) (*Server, error) {
 		panic("BlockTime must be greater than zero")
 	}
 
-	if opts.DNS == nil {
+	if opts.dns == nil {
 		panic("DNS must not be nil")
 	}
 
-	if opts.Logger == nil {
-		opts.Logger = config.LoggerWithPrefixes("server", "id", opts.ID, "addr", opts.ListenAddr)
+	addressStr := privKey.PublicKey().Address().ShortString(8)
+
+	if opts.logger == nil {
+		opts.logger = config.LoggerWithPrefixes("server", "address", addressStr, "domain", opts.domain)
 	}
 
-	if opts.MaxPeers == 0 {
-		opts.MaxPeers = 4
+	if opts.maxPeers == 0 {
+		opts.maxPeers = 4
 	}
 
-	if !opts.Flooding && opts.GossipFactor == 0 {
-		opts.GossipFactor = (opts.MaxPeers * 2) / 3
+	if !opts.flooding && opts.gossipFactor == 0 {
+		opts.gossipFactor = (opts.maxPeers * 2) / 3
 
-		if opts.GossipFactor == 0 && opts.MaxPeers > 1 {
-			opts.GossipFactor = 1
+		if opts.gossipFactor == 0 && opts.maxPeers > 1 {
+			opts.gossipFactor = 1
 		}
 	}
 
-	chain, err := core.NewBlockchain(opts.BlockDir)
+	if opts.blockDir == "" {
+		opts.blockDir = fmt.Sprintf("blocks_%s", opts.domain)
+	}
+
+	chain, err := core.NewBlockchain(opts.blockDir)
 
 	if err != nil {
 		var syncErr *core.BlockSyncingError
@@ -240,52 +248,64 @@ func NewServer(opts ServerOpts, chainParams ChainParameter) (*Server, error) {
 		return nil, err
 	}
 
-	messageCh := make(chan RawMessage)
-	newPeerCh := make(chan Peer)
-	delPeerCh := make(chan Peer)
-
-	node := NewTCPNode(opts.ID, opts.ListenAddr, messageCh, newPeerCh, delPeerCh)
+	quitCh := make(chan struct{})
+	node := NewTCPNode(privKey, opts.listenAddr, opts.domain, quitCh)
+	messageCh := node.ConsumeMessage()
+	newPeerCh, delPeerCh := node.ConsumePeer()
 
 	s := &Server{
-		ServerOpts:     opts,
-		ChainParameter: chainParams,
-		node:           node,
-		peerMap:        types.NewSyncMap[string, Peer](),
-		chain:          chain,
-		memPool:        core.NewMemPool(chainParams.MaxPoolSize),
-		rawMessageCh:   messageCh,
-		newPeerCh:      newPeerCh,
-		delPeerCh:      delPeerCh,
-		quitCh:         make(chan struct{}),
-		syncStatCh:     nil,
-		syncQuitCh:     nil,
+		ServerOpts:       opts,
+		ChainParameter:   chainParams,
+		privKey:          privKey,
+		pubKey:           privKey.PublicKey(),
+		address:          privKey.PublicKey().Address(),
+		node:             node,
+		peerMap:          types.NewSyncMap[types.Address, Peer](),
+		validatorSet:     types.NewSyncSet[types.Address](),
+		consensusEngines: types.NewSyncMap[uint64, PBFTConsensusEngine](),
+		status:           types.NewAtomicNumber[ServerStatusType](ServerStatusTypeBootstrap),
+		chain:            chain,
+		memPool:          core.NewMemPool(chainParams.MaxPoolSize),
+		rawMessageCh:     messageCh,
+		newPeerCh:        newPeerCh,
+		delPeerCh:        delPeerCh,
+		quitCh:           quitCh,
+		syncStatCh:       nil,
+		syncQuitCh:       nil,
 	}
 
-	if opts.RawMessageDecodeFunc == nil {
-		s.RawMessageDecodeFunc = s.DefaultRawMessageDecodeFunc
+	if s.processor == nil {
+		s.processor = s.chain.Processor()
 	}
 
-	if opts.MessageProcessFunc == nil {
-		s.MessageProcessFunc = s.DefaultMessageProcessFunc
+	if s.broadcaster == nil {
+		s.broadcaster = s
+	}
+
+	if opts.rawMessageDecodeFunc == nil {
+		s.rawMessageDecodeFunc = s.DefaultRawMessageDecodeFunc
+	}
+
+	if opts.messageProcessFunc == nil {
+		s.messageProcessFunc = s.DefaultMessageProcessFunc
 	}
 
 	return s, nil
 }
 
-func (s *Server) UpgradeToProposer(privKey crypto.PrivateKey) (*Server, error) {
-	s.proposer = core.NewBlockPropoesr(s.chain, s.memPool, privKey)
+func (s *Server) UpgradeToValidator(pro bool) *Server {
+	s.validator = core.NewBlockValidator(s.privKey)
+	_ = s.logger.Log("event", "upgraded_to_validator")
 
-	_ = s.Logger.Log(
-		"event", "upgraded_to_proposer",
-		"proposer_address", privKey.PublicKey().Address().String(),
-	)
+	if pro {
+		_ = s.logger.Log("event", "upgraded_to_proposer")
+		s.proposer = core.NewBlockProposer(s.chain, s.memPool, s.privKey)
+	}
 
-	return s, nil
+	return s
 }
 
 func (s *Server) Start() error {
-	s.setStatus(BlockchainStatusTypeBootstrap)
-
 	if err := s.node.Listen(); err != nil {
 		return err
 	}
@@ -310,32 +330,11 @@ func (s *Server) Shutdown(wg *sync.WaitGroup) {
 	close(s.quitCh)
 }
 
-func (s *Server) isOnline() bool {
-	s.statusLock.RLock()
-	defer s.statusLock.RUnlock()
-
-	return s.status == BlockchainStatusTypeOnline
-}
-
-func (s *Server) isSyncing() bool {
-	s.statusLock.RLock()
-	defer s.statusLock.RUnlock()
-
-	return s.status == BlockchainStatusTypeSyncing
-}
-
-func (s *Server) isForked() bool {
-	s.statusLock.RLock()
-	defer s.statusLock.RUnlock()
-
-	return s.status == BlockchainStatusTypeForked
-}
-
 func (s *Server) DefaultRawMessageDecodeFunc(rm RawMessage) (*DecodedMessage, error) {
 	msg := new(Message)
 
 	if err := gob.NewDecoder(rm.Payload).Decode(&msg); err != nil {
-		_ = s.Logger.Log("event", "top_level_message_decode_error", "from", rm.From, "error", err)
+		_ = s.logger.Log("event", "top_level_message_decode_error", "from", rm.From, "error", err)
 
 		return nil, fmt.Errorf("failed to decode message from %s: %s", rm.From, err)
 	}
@@ -359,6 +358,12 @@ func (s *Server) DefaultRawMessageDecodeFunc(rm RawMessage) (*DecodedMessage, er
 		o = new(RequestBlocks)
 	case MessageTypeResBlocks:
 		o = new(ResponseBlocks)
+	case MessageTypePrePrepare:
+		o = new(PrePrepareMessage)
+	case MessageTypePrepare:
+		o = new(PrepareMessage)
+	case MessageTypeCommit:
+		o = new(CommitMessage)
 	default:
 		// TODO: WHAT THE FUCK IS THIS CASE
 		return nil, fmt.Errorf("unknown message type: %s", msg.Type)
@@ -374,54 +379,68 @@ func (s *Server) DefaultRawMessageDecodeFunc(rm RawMessage) (*DecodedMessage, er
 	}, nil
 }
 
-func (s *Server) DefaultMessageProcessFunc(msg *DecodedMessage) error {
+func (s *Server) DefaultMessageProcessFunc(msg *DecodedMessage) {
 	switch t := msg.Data.(type) {
 	case *core.Transaction:
-		return s.processTransaction(msg.From, t)
+		s.processTransaction(msg.From, t)
 	case *core.Block:
-		return s.processBlock(msg.From, t)
+		s.processBlock(msg.From, t)
 	case *RequestStatus:
-		return s.processRequestStatus(msg.From, t)
+		s.processRequestStatus(msg.From, t)
 	case *ResponseStatus:
-		return s.processResponseStatus(msg.From, t)
+		s.processResponseStatus(msg.From, t)
 	case *RequestHeaders:
-		return s.processRequestHeaders(msg.From, t)
+		s.processRequestHeaders(msg.From, t)
 	case *ResponseHeaders:
-		return s.processResponseHeaders(msg.From, t)
+		s.processResponseHeaders(msg.From, t)
 	case *RequestBlocks:
-		return s.processRequestBlocks(msg.From, t)
+		s.processRequestBlocks(msg.From, t)
 	case *ResponseBlocks:
-		return s.processResponseBlocks(msg.From, t)
+		s.processResponseBlocks(msg.From, t)
+	case *PrePrepareMessage:
+		s.processPrePrepareMessage(msg.From, t)
+	case *PrepareMessage:
+		s.processPrepareMessage(msg.From, t)
+	case *CommitMessage:
+		s.processCommitMessage(msg.From, t)
 	default:
-		return fmt.Errorf("unknown message type in process func: %T", t)
 	}
 }
 
-func (s *Server) setStatus(status BlockchainStatusType) {
-	s.statusLock.Lock()
-	defer s.statusLock.Unlock()
+func (s *Server) isOnline() bool {
+	return s.status.Eq(ServerStatusTypeOnline)
+}
 
-	s.status = status
-	_ = s.Logger.Log("event", "update_status", "status", status.String())
+func (s *Server) isSyncing() bool {
+	return s.status.Eq(ServerStatusTypeSyncing)
+}
+
+func (s *Server) isForked() bool {
+	return s.status.Eq(ServerStatusTypeForked)
+}
+
+func (s *Server) setStatus(status ServerStatusType) {
+	s.status.Set(status)
+	_ = s.logger.Log("event", "update_status", "status", status.String())
+}
+
+func (s *Server) getDNSPeerStatus() *PeerStatus {
+	return &PeerStatus{
+		Address:        s.address.String(),
+		NetAddr:        s.listenAddr,
+		Domain:         s.domain,
+		Connections:    uint8(s.peerMap.Len()),
+		MaxConnections: uint8(s.maxPeers),
+		Height:         s.chain.Height(),
+		IsValidator:    s.validator != nil,
+	}
 }
 
 func (s *Server) mustRegisterDNS() {
-	_ = s.Logger.Log("event", "register_DNS")
+	_ = s.logger.Log("msg", "register to DNS")
 
-	stat := &PeerStatus{
-		ID:             s.ID,
-		Addr:           s.ListenAddr,
-		Connections:    0,
-		MaxConnections: 0,
-		Height:         0,
-		Validator:      s.chain.IsValidator(),
-		Proposer:       s.proposer != nil,
-	}
-
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	err := s.DNS.Register(stat, wg)
-	wg.Wait()
+	stat := s.getDNSPeerStatus()
+	err := s.dns.Register(stat)
 
 	if err != nil {
 		panic("failed to register DNS: " + err.Error())
@@ -430,23 +449,13 @@ func (s *Server) mustRegisterDNS() {
 
 func (s *Server) discoverPeers() {
 	currentPeerCount := s.peerMap.Len()
-	needed := s.MaxPeers - currentPeerCount
+	needed := s.maxPeers - currentPeerCount
 
 	if needed <= 0 {
 		return
 	}
 
-	stat := &PeerStatus{
-		ID:             s.ID,
-		Addr:           s.ListenAddr,
-		Connections:    0,
-		MaxConnections: 0,
-		Height:         0,
-		Validator:      s.chain.IsValidator(),
-		Proposer:       s.proposer != nil,
-	}
-
-	peerCandidates, err := s.DNS.DiscoverPeers(stat, 16)
+	peerCandidates, err := s.dns.DiscoverPeers()
 
 	if err != nil {
 		panic(fmt.Sprintf("failed to discover peers: %s", err))
@@ -456,26 +465,26 @@ func (s *Server) discoverPeers() {
 		return
 	}
 
-	connectedPeers := make(map[string]bool)
-	connectedIDs := make(map[string]bool)
+	connectedPeers := make(map[types.Address]struct{})
 
 	for _, peer := range s.peerMap.Iterator() {
-		connectedPeers[peer.Addr()] = true
-		connectedIDs[peer.ID()] = true
+		connectedPeers[peer.Identity().Address] = struct{}{}
 	}
 
 	filteredCandidates := make([]PeerStatus, 0)
 
 	for _, candidate := range peerCandidates {
-		if connectedPeers[candidate.Addr] {
+		candidateAddress, err := types.AddressFromHexString(candidate.Address)
+
+		if err != nil {
 			continue
 		}
 
-		if connectedIDs[candidate.ID] {
+		if _, ok := connectedPeers[candidateAddress]; ok {
 			continue
 		}
 
-		if s.ID == candidate.ID {
+		if s.address == candidateAddress {
 			continue
 		}
 
@@ -497,38 +506,38 @@ func (s *Server) discoverPeers() {
 		return filteredCandidates[i].Connections < filteredCandidates[j].Connections
 	})
 
-	_ = s.Logger.Log("event", "new_peer_candidates", "needed", needed, "found_new", len(filteredCandidates))
+	bestCandidate := filteredCandidates[0]
+	bestAddress, _ := types.AddressFromHexString(bestCandidate.Address)
 
-	connectedCount := 0
-	for _, candidate := range filteredCandidates {
-		if connectedCount >= needed || s.peerMap.Len() >= s.MaxPeers {
-			break
+	_ = s.logger.Log(
+		"msg", "found peer candidate, attempting to connect",
+		"peer-address", bestAddress.ShortString(8),
+		"peer-net-addr", bestCandidate.NetAddr,
+		"peer-connections", bestCandidate.Connections,
+	)
+
+	go func() {
+		if err := s.node.Connect(bestCandidate.NetAddr); err != nil {
+			_ = s.logger.Log("error", "failed to connect to best peer", "err", err)
 		}
+	}()
+}
 
-		if err = s.node.Connect(candidate.Addr); err != nil {
-			if strings.Contains(err.Error(), "actively refused") {
-				return
-			}
-
-			connectedCount++
-
-			_ = s.Logger.Log(
-				"event", "failed_to_connect_peer",
-				"peer-addr", candidate.Addr,
-				"error", err,
-			)
-		}
+func (s *Server) heartbeat() {
+	stat := s.getDNSPeerStatus()
+	if err := s.dns.Heartbeat(stat); err != nil {
+		_ = s.logger.Log("event", "failed_to_heartbeat", "error", err)
 	}
 }
 
 func (s *Server) loop() {
-	s.setStatus(BlockchainStatusTypeOnline)
+	s.setStatus(ServerStatusTypeOnline)
 
-	if s.Tester {
+	if s.tester {
 		go s.testFunc()
 	}
 
-	_ = s.Logger.Log("event", "server_started", "height", s.chain.Height())
+	_ = s.logger.Log("event", "server_started", "height", s.chain.Height())
 
 frontier:
 	for {
@@ -539,40 +548,56 @@ frontier:
 				err error
 			)
 
-			if msg, err = s.RawMessageDecodeFunc(rawMessage); err != nil {
-				_ = s.Logger.Log("event", "message_decode_error", "error", err)
+			if msg, err = s.rawMessageDecodeFunc(rawMessage); err != nil {
+				_ = s.logger.Log("event", "message_decode_error", "error", err)
 				continue
 			}
 
-			if err = s.MessageProcessFunc(msg); err != nil {
-				_ = s.Logger.Log("event", "message_process_error", "error", err)
-				continue
-			}
+			s.messageProcessFunc(msg)
 
 		case newPeer := <-s.newPeerCh:
 			if err := s.processNewPeer(newPeer); err != nil {
-				_ = s.Logger.Log("event", "failed_to_process_peer", "peer-id", newPeer.ID(), "peer-addr", newPeer.Addr(), "error", err)
+				identity := newPeer.Identity()
+				_ = s.logger.Log(
+					"msg", "failed to connect peer",
+					"peer-address", identity.Address.ShortString(8),
+					"peer-addr", identity.NetAddr,
+					"error", err,
+				)
 				continue
 			}
 
 			s.heartbeat()
 
 		case delPeer := <-s.delPeerCh:
-			s.peerMap.Remove(delPeer.Addr())
+			identity := delPeer.Identity()
+
+			s.peerMap.Remove(identity.Address)
 			s.node.Remove(delPeer)
+
+			_ = s.logger.Log(
+				"msg", "peer terminated",
+				"peer-address", identity.Address.ShortString(8),
+				"peer-net-addr", identity.NetAddr,
+			)
 
 			s.heartbeat()
 
 		case <-s.quitCh:
-			_ = s.Logger.Log("event", "shutdown_signal_received")
+			_ = s.logger.Log("event", "shutdown_signal_received")
 			_ = s.node.Stop()
-			_ = s.Logger.Log("event", "closing_all_peer", "count", s.peerMap.Len())
+			_ = s.logger.Log("event", "closing_all_peer", "count", s.peerMap.Len())
+
+			stat := s.getDNSPeerStatus()
+			go func() {
+				_ = s.dns.Deregister(stat)
+			}()
 
 			for _, peer := range s.peerMap.Iterator() {
 				peer.Close()
 			}
 
-			_ = s.Logger.Log("event", "close_server_channels")
+			_ = s.logger.Log("event", "close_server_channels")
 			close(s.newPeerCh)
 			close(s.delPeerCh)
 			close(s.rawMessageCh)
@@ -583,8 +608,11 @@ frontier:
 }
 
 func (s *Server) manageConnections() {
-	time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
-	ticker := time.NewTicker(1 * time.Minute)
+	// Delay for managing safety
+	<-time.After(time.Duration(rand.Intn(60)) * time.Second)
+	s.discoverPeers()
+
+	ticker := time.NewTicker(3 * time.Minute)
 	defer ticker.Stop()
 
 	for {
@@ -592,14 +620,26 @@ func (s *Server) manageConnections() {
 		case <-s.quitCh:
 			return
 		case <-ticker.C:
-			if s.peerMap.Len() < s.MaxPeers {
+			if s.peerMap.Len() < s.maxPeers {
 				s.discoverPeers()
 			} else {
-				peers := s.peerMap.Values()
-				if len(peers) > 0 {
-					randomPeer := peers[rand.Intn(len(peers))]
-					_ = s.Logger.Log("event", "churning", "msg", "cycling peer connection", "disconnecting", randomPeer.ID())
-					randomPeer.Close()
+				var oldestPeer Peer
+				oldestTime := time.Now().UnixNano()
+
+				for _, peer := range s.peerMap.Values() {
+					identify := peer.Identity()
+					if identify.ConnectedTime < oldestTime {
+						oldestTime = identify.ConnectedTime
+						oldestPeer = peer
+					}
+				}
+
+				if oldestPeer != nil {
+					_ = s.logger.Log(
+						"msg", "churning oldest peer",
+						"peer-address", oldestPeer.Identity().Address.ShortString(8),
+					)
+					oldestPeer.Close()
 				}
 			}
 		}
@@ -607,7 +647,7 @@ func (s *Server) manageConnections() {
 }
 
 func (s *Server) statusLogLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -615,25 +655,26 @@ func (s *Server) statusLogLoop() {
 		case <-s.quitCh:
 			return
 		case <-ticker.C:
-			connStr := fmt.Sprintf("%d/%d", s.peerMap.Len(), s.MaxPeers)
-			_ = s.Logger.Log("event", "status_update", "connections", connStr, "chain_height", s.chain.Height(), "status", s.status.String())
+			peers := s.peerMap.Values()
+
+			sort.Slice(peers, func(i, j int) bool {
+				return peers[i].Identity().ConnectedTime < peers[j].Identity().ConnectedTime
+			})
+
+			peerIDs := make([]string, len(peers))
+			for i, p := range peers {
+				peerIDs[i] = p.Identity().Domain
+			}
+			peerStr := fmt.Sprintf("[%s]", strings.Join(peerIDs, ", "))
+			connStr := fmt.Sprintf("%d/%d", len(peers), s.maxPeers)
+			_ = s.logger.Log(
+				"event", "status_update",
+				"connections", connStr,
+				"chain-height", s.chain.Height(),
+				"status", s.status.Get().String(),
+				"peers", peerStr,
+			)
 		}
-	}
-}
-
-func (s *Server) heartbeat() {
-	stat := &PeerStatus{
-		ID:             s.ID,
-		Addr:           s.ListenAddr,
-		Connections:    uint8(s.peerMap.Len()),
-		MaxConnections: uint8(s.MaxPeers),
-		Height:         s.chain.Height(),
-		Validator:      s.chain.IsValidator(),
-		Proposer:       s.proposer != nil,
-	}
-
-	if err := s.DNS.Heartbeat(stat); err != nil {
-		_ = s.Logger.Log("event", "failed_to_heartbeat", "error", err)
 	}
 }
 
@@ -654,13 +695,13 @@ func (s *Server) heartbeatLoop() {
 func (s *Server) syncChainLoop(fullSync bool) {
 	s.syncStatCh = make(chan *ServerStatus, 16)
 	s.syncQuitCh = make(chan struct{})
-	s.setStatus(BlockchainStatusTypeSyncing)
+	s.setStatus(ServerStatusTypeSyncing)
 
-	_ = s.Logger.Log("event", "start_sync_chain", "full_sync", fullSync)
+	_ = s.logger.Log("event", "start_sync_chain", "full_sync", fullSync)
 
 	defer func() {
-		_ = s.Logger.Log("event", "sync_chain_terminated", "msg", "resetting syncing fields")
-		s.setStatus(BlockchainStatusTypeOnline)
+		_ = s.logger.Log("event", "sync_chain_terminated", "msg", "resetting syncing fields")
+		s.setStatus(ServerStatusTypeOnline)
 
 		close(s.syncStatCh)
 		close(s.syncQuitCh)
@@ -678,35 +719,43 @@ func (s *Server) syncChainLoop(fullSync bool) {
 	}
 
 	if fullSync {
-		_ = s.Logger.Log("event", "full_sync_triggered", "msg", "resetting local chain state")
+		_ = s.logger.Log("event", "full_sync_triggered", "msg", "resetting local chain state")
 
 		s.chain.ClearHeader()
 
 		if err := s.chain.ClearStorage(); err != nil {
-			_ = s.Logger.Log("event", "clearing_block_storage_failed", "error", err)
+			_ = s.logger.Log("event", "clearing_block_storage_failed", "error", err)
 			return
 		}
 
 		_ = s.chain.AddBlock(core.GetGenesisBlock())
-		_ = s.Logger.Log("event", "local_chain_re_initiated", "msg", "local chain reset and genesis block added")
+		_ = s.logger.Log("event", "local_chain_re_initiated", "msg", "local chain reset and genesis block added")
 	}
 
 	ticker := time.NewTicker(2 * time.Second)
-	onlinePeerMap := make(map[string]*ServerStatus)
+	onlinePeerMap := make(map[types.Address]*ServerStatus)
 
 sync:
 	for {
 		select {
 		case stat := <-s.syncStatCh:
-			_ = s.Logger.Log("event", "received_peer_status", "from", stat.ListenAddr, "height", stat.Height, "status", stat.Status.String())
+			_ = s.logger.Log(
+				"msg", "received peer status during syncing chain",
+				"peer-address", stat.Address.ShortString(8),
+				"peer-height", stat.Height,
+				"peer-status", stat.Status.String(),
+			)
 
 			genesis, _ := s.chain.GetHeader(0)
 			localGenesisBlockHash := core.BlockHasher{}.Hash(genesis)
 
 			if stat.GenesisBlockHash != localGenesisBlockHash {
-				_ = s.Logger.Log("event", "different_network", "msg", "peer has different genesis block, disconnecting", "peer", stat.ListenAddr)
+				_ = s.logger.Log(
+					"msg", "peer has different genesis block, disconnecting",
+					"peer-address", stat.Address.ShortString(8),
+				)
 
-				peer, ok := s.peerMap.Get(stat.ListenAddr)
+				peer, ok := s.peerMap.Get(stat.Address)
 
 				if ok {
 					peer.Close()
@@ -715,9 +764,9 @@ sync:
 				continue
 			}
 
-			if stat.Status == BlockchainStatusTypeOnline {
+			if stat.Status == ServerStatusTypeOnline {
 				if stat.Height > s.chain.Height() {
-					onlinePeerMap[stat.ListenAddr] = stat
+					onlinePeerMap[stat.Address] = stat
 					continue
 				}
 
@@ -725,58 +774,64 @@ sync:
 				localCurrentBlockHash := core.BlockHasher{}.Hash(localCurrentBlockHeader)
 
 				if stat.Height == s.chain.Height() || stat.CurrentBlockHash == localCurrentBlockHash {
-					onlinePeerMap[stat.ListenAddr] = stat
+					onlinePeerMap[stat.Address] = stat
 					continue
 				}
 			}
 
 		case <-ticker.C:
 			if s.peerMap.Len() == 0 {
-				_ = s.Logger.Log("event", "no_peers_connected", "msg", "stopping sync chain")
+				_ = s.logger.Log("event", "no_peers_connected", "msg", "stopping sync chain")
 				break sync
 			}
 
 			if len(onlinePeerMap) == 0 {
-				_ = s.Logger.Log("event", "no_online_peers", "msg", "requesting status from all")
+				_ = s.logger.Log("event", "no_online_peers", "msg", "requesting status from all")
 				if err := s.floodRequestStatus(); err != nil {
-					_ = s.Logger.Log("event", "flood_request_status_error", "error", err)
+					_ = s.logger.Log("event", "flood_request_status_error", "error", err)
 				}
 
 				continue
 			}
 
-			highestHeight := s.chain.Height() // will be 0
-			var highestPeerListenAddr string
+			highestHeight := s.chain.Height()
+			var highestPeerListenAddr types.Address
 
-			for l, stat := range onlinePeerMap {
+			for address, stat := range onlinePeerMap {
 				if highestHeight <= stat.Height {
 					highestHeight = stat.Height
-					highestPeerListenAddr = l
+					highestPeerListenAddr = address
 				}
 			}
 
 			if s.chain.Height() >= highestHeight {
-				_ = s.Logger.Log("event", "sync_finished", "msg", "chain is fully synced", "height", s.chain.Height())
+				_ = s.logger.Log("event", "sync_finished", "msg", "chain is fully synced", "height", s.chain.Height())
 				break sync
 			}
 
 			if s.chain.Height() < highestHeight {
 				p, _ := s.peerMap.Get(highestPeerListenAddr)
 
-				_ = s.Logger.Log("event", "request_blocks", "from_height", s.chain.Height()+1, "peer-addr", p.Addr())
+				identify := p.Identity()
+				_ = s.logger.Log(
+					"msg", "request blocks",
+					"from_height", s.chain.Height()+1,
+					"peer-address", identify.Address.ShortString(8),
+					"peer-net-addr", identify.NetAddr,
+				)
 				_ = s.requestBlocks(p, s.chain.Height()+1, 16)
 			}
 
 			if err := s.floodRequestStatus(); err != nil {
-				_ = s.Logger.Log("event", "flood_request_status_error", "error", err)
+				_ = s.logger.Log("event", "flood_request_status_error", "error", err)
 			}
 
 		case <-s.syncQuitCh:
-			_ = s.Logger.Log("event", "canceled_sync_chain")
+			_ = s.logger.Log("event", "canceled_sync_chain")
 			break sync
 
 		case <-s.quitCh: // server cut-down signal
-			_ = s.Logger.Log("event", "shutdown", "msg", "server shutdown signal received, terminating sync loop")
+			_ = s.logger.Log("event", "shutdown", "msg", "server shutdown signal received, terminating sync loop")
 			break sync
 		}
 	}
@@ -803,7 +858,7 @@ func (s *Server) testFunc() {
 				tx := core.NewTransaction([]byte("Hello world"))
 				_ = tx.Sign(key)
 
-				_ = s.broadcast(tx)
+				_ = s.broadcaster.Broadcast(tx)
 			}()
 		}
 
@@ -811,7 +866,7 @@ func (s *Server) testFunc() {
 	}
 }
 
-func (s *Server) broadcast(o any) error {
+func (s *Server) Broadcast(o any) error {
 	var msgType MessageType
 
 	buf := new(bytes.Buffer)
@@ -823,11 +878,20 @@ func (s *Server) broadcast(o any) error {
 	case *core.Block:
 		_ = t.Marshall(buf)
 		msgType = MessageTypeNewBlock
+	case *PrePrepareMessage:
+		_ = t.Marshall(buf)
+		msgType = MessageTypePrePrepare
+	case *PrepareMessage:
+		_ = t.Marshall(buf)
+		msgType = MessageTypePrepare
+	case *CommitMessage:
+		_ = t.Marshall(buf)
+		msgType = MessageTypeCommit
 	}
 
 	msg := NewMessage(msgType, buf.Bytes())
 
-	if s.Flooding {
+	if s.flooding {
 		return s.flood(msg.Bytes())
 	}
 
@@ -836,13 +900,7 @@ func (s *Server) broadcast(o any) error {
 
 func (s *Server) flood(payload []byte) error {
 	for _, peer := range s.peerMap.Iterator() {
-		go func(peer Peer) {
-			if err := s.send(peer, payload); IsUnrecoverableTCPError(err) {
-				if IsUnrecoverableTCPError(err) {
-					s.delPeerCh <- peer
-				}
-			}
-		}(peer)
+		go s.send(peer, payload)
 	}
 
 	return nil
@@ -853,7 +911,7 @@ func (s *Server) floodRequestStatus() error {
 	buf := new(bytes.Buffer)
 
 	if err := gob.NewEncoder(buf).Encode(req); err != nil {
-		_ = s.Logger.Log("event", "encode_request_status_error", "err", err)
+		_ = s.logger.Log("event", "encode_request_status_error", "err", err)
 		return err
 	}
 
@@ -863,7 +921,7 @@ func (s *Server) floodRequestStatus() error {
 }
 
 func (s *Server) gossip(payload []byte) error {
-	if s.peerMap.Len() <= s.GossipFactor {
+	if s.peerMap.Len() <= s.gossipFactor {
 		return s.flood(payload)
 	}
 
@@ -874,65 +932,72 @@ func (s *Server) gossip(payload []byte) error {
 		peers[i], peers[j] = peers[j], peers[i]
 	})
 
-	for i := 0; i < s.GossipFactor; i++ {
-		go func(peer Peer) {
-			if err := s.send(peer, payload); IsUnrecoverableTCPError(err) {
-				if IsUnrecoverableTCPError(err) {
-					s.delPeerCh <- peer
-				}
-			}
-		}(peers[i])
+	for _, peer := range peers {
+		go s.send(peer, payload)
 	}
 
 	return nil
 }
 
-func (s *Server) send(peer Peer, payload []byte) error {
-	if err := peer.Send(payload); err != nil {
-		_ = s.Logger.Log("event", "peer_send_error", "peer_id", peer.ID(), "err", err)
-		return err
+func (s *Server) send(peer Peer, payload []byte) {
+	if err := peer.Send(payload); IsUnrecoverableTCPError(err) {
+		identify := peer.Identity()
+		_ = s.logger.Log(
+			"msg", "send message error",
+			"peer-address", identify.Address.ShortString(8),
+			"peer-net-addr", identify.NetAddr,
+			"err", err,
+		)
+
+		peer.Close()
 	}
 
-	return nil
+	return
 }
 
 func (s *Server) proposerLoop() {
 	ticker := time.NewTicker(s.BlockTime)
 
-	_ = s.Logger.Log("msg", "starting proposer loop")
+	_ = s.logger.Log("msg", "starting proposer loop")
 
 	for {
 		<-ticker.C
 
 		if err := s.createNewBlock(); err != nil {
-			_ = s.Logger.Log("msg", "error creating new block", "err", err)
+			_ = s.logger.Log("msg", "error creating new block", "err", err)
 		}
 	}
 }
 
 func (s *Server) createNewBlock() error {
 	if s.memPool.IsNilPending() {
-		_ = s.Logger.Log("msg", "no pending transactions, skipping block creation")
+		_ = s.logger.Log("msg", "no pending transactions, skipping block creation")
 		return nil
 	}
 
 	block, err := s.proposer.CreateBlock()
 
 	if err != nil {
-		_ = s.Logger.Log("msg", "failed to create block", "err", err)
+		_ = s.logger.Log("msg", "failed to create block", "err", err)
 		return err
 	}
 
-	_ = s.Logger.Log(
+	_ = s.logger.Log(
 		"msg", "new block created successfully",
 		"height", block.Height,
 		"hash", block.Hash(core.BlockHasher{}).ShortString(10),
 		"transactions", len(block.Transactions),
 	)
 
+	prePrepareMsg := NewPrePrepareMessage(block)
+
+	if err = prePrepareMsg.Sign(s.validator.PrivateKey()); err != nil {
+		return err
+	}
+
 	go func() {
-		if err = s.broadcast(block); err != nil {
-			_ = s.Logger.Log("msg", "broadcast-block-error", "error", err)
+		if err = s.broadcaster.Broadcast(prePrepareMsg); err != nil {
+			_ = s.logger.Log("msg", "broadcast-pre-prepare-error", "error", err)
 		}
 	}()
 
@@ -940,71 +1005,86 @@ func (s *Server) createNewBlock() error {
 }
 
 func (s *Server) processNewPeer(peer Peer) error {
-	if s.peerMap.Len() >= s.MaxPeers {
+	if s.peerMap.Len() >= s.maxPeers {
 		peer.Close()
 		return fmt.Errorf("max peers reached")
 	}
 
-	s.peerMap.Put(peer.Addr(), peer)
+	identify := peer.Identity()
+	s.peerMap.Put(identify.Address, peer)
+	_ = s.logger.Log(
+		"msg", "new peer registered",
+		"peer-address", identify.Address.ShortString(8),
+		"peer-net-addr", identify.NetAddr,
+		"peer-net-domain", identify.Domain,
+	)
 
 	go peer.Read()
 
 	return nil
 }
 
-func (s *Server) processTransaction(_ net.Addr, tx *core.Transaction) error {
+func (s *Server) processTransaction(_ types.Address, tx *core.Transaction) {
 	if !s.isOnline() {
-		return nil
+		return
 	}
 
 	hash := tx.Hash(core.TxHasher{})
 
 	if s.memPool.Contains(tx) {
-		return nil
+		return
 	}
 
 	// _ = s.Logger.Log("msg", "processing transaction", "tx", tx.Nonce)
 
 	if err := tx.Verify(); err != nil {
-		_ = s.Logger.Log("msg", "invalid transaction signature", "hash", hash.ShortString(8), "err", err)
-		return nil
+		_ = s.logger.Log("msg", "invalid transaction signature", "hash", hash.ShortString(8), "err", err)
+		return
 	}
 
 	tx.SetFirstSeen()
 	s.memPool.Add(tx)
 
 	go func() {
-		if err := s.broadcast(tx); err != nil {
-			_ = s.Logger.Log("msg", "failed to broadcast transaction", "hash", hash.ShortString(8), "err", err)
+		if err := s.broadcaster.Broadcast(tx); err != nil {
+			_ = s.logger.Log("msg", "failed to broadcast transaction", "hash", hash.ShortString(8), "err", err)
 		}
 	}()
 
-	return nil
+	return
 }
 
-func (s *Server) processBlock(from net.Addr, block *core.Block) error {
+func (s *Server) processBlock(from types.Address, block *core.Block) {
 	hash := block.Hash(core.BlockHasher{})
 
 	if err := s.chain.AddBlock(block); err != nil {
 		switch {
 		case errors.Is(err, core.ErrBlockKnown):
-			return nil
+			return
 
 		case errors.Is(err, core.ErrFutureBlock):
 			if s.isOnline() {
-				_ = s.Logger.Log("msg", "future block received, triggering sync", "our_height", s.chain.Height(), "network_height", block.Height)
+				_ = s.logger.Log(
+					"msg", "future block received, triggering sync",
+					"our_height", s.chain.Height(),
+					"network_height", block.Height,
+				)
 
 				go s.syncChainLoop(false)
 			}
 
-			return nil
+			return
 
 		case errors.Is(err, core.ErrUnknownParent):
-			s.setStatus(BlockchainStatusTypeForked)
+			s.setStatus(ServerStatusTypeForked)
 
-			_ = s.Logger.Log("msg", "block with unknown parent, fork detected", "our_height", s.chain.Height(), "forked_height", block.Height)
+			_ = s.logger.Log(
+				"msg", "block with unknown parent, fork detected",
+				"local-height", s.chain.Height(),
+				"network-height", block.Height,
+			)
 
-			if peer, ok := s.peerMap.Get(from.String()); ok {
+			if peer, ok := s.peerMap.Get(from); ok {
 				go func(peer Peer) {
 					req := uint64(1)
 					if s.chain.Height() > 7 {
@@ -1014,11 +1094,11 @@ func (s *Server) processBlock(from net.Addr, block *core.Block) error {
 				}(peer)
 			}
 
-			return nil
+			return
 
 		default:
-			_ = s.Logger.Log("msg", "failed to add block to chain", "hash", hash.ShortString(8), "err", err)
-			return err
+			_ = s.logger.Log("msg", "failed to add block to chain", "hash", hash.ShortString(8), "err", err)
+			return
 		}
 	}
 
@@ -1026,34 +1106,43 @@ func (s *Server) processBlock(from net.Addr, block *core.Block) error {
 		s.memPool.PrunePending(block.Transactions)
 
 		go func() {
-			if err := s.broadcast(block); err != nil {
-				_ = s.Logger.Log("msg", "broadcast-block-error", "error", err)
+			if err := s.broadcaster.Broadcast(block); err != nil {
+				_ = s.logger.Log("msg", "broadcast-block-error", "error", err)
 			}
 		}()
 	}
 
-	return nil
+	return
 }
 
-func (s *Server) processRequestStatus(from net.Addr, _ *RequestStatus) error {
-	peer, ok := s.peerMap.Get(from.String())
+func (s *Server) processRequestStatus(from types.Address, _ *RequestStatus) {
+	peer, ok := s.peerMap.Get(from)
 
 	if !ok {
-		return fmt.Errorf("peer (%s) not found", from.String())
+		_ = s.logger.Log("msg", "peer not found", "not_found", from.ShortString(8))
+		return
 	}
 
-	_ = s.Logger.Log("msg", "received status request", "peer-addr", from.String())
+	_ = s.logger.Log("msg", "received status request", "peer-addr", from.ShortString(8))
 
-	return s.responseStatus(peer)
+	s.responseStatus(peer)
+
+	return
 }
 
-func (s *Server) processResponseStatus(from net.Addr, res *ResponseStatus) error {
-	_ = s.Logger.Log("msg", "received status response", "peer-id", res.ID, "peer-addr", from.String(), "peer-height", res.Height, "peer-status", res.Status.String())
+func (s *Server) processResponseStatus(from types.Address, res *ResponseStatus) {
+	_ = s.logger.Log(
+		"msg", "received status response",
+		"peer-address", from.ShortString(8),
+		"peer-net-addr", res.NetAddr,
+		"peer-height", res.Height,
+		"peer-status", res.Status.String(),
+	)
 
 	if s.isSyncing() || s.isForked() {
 		stat := &ServerStatus{
-			ID:               res.ID,
-			ListenAddr:       from.String(),
+			Address:          from,
+			NetAddr:          res.NetAddr,
 			Status:           res.Status,
 			Height:           res.Height,
 			GenesisBlockHash: res.GenesisBlockHash,
@@ -1064,29 +1153,44 @@ func (s *Server) processResponseStatus(from net.Addr, res *ResponseStatus) error
 			select {
 			case s.syncStatCh <- stat:
 			case <-time.After(5 * time.Second):
-				_ = s.Logger.Log("msg", "deliver to syncStatCh timeout, dropping status message", "peer-id", res.ID, "peer-addr", from.String())
+				_ = s.logger.Log(
+					"msg", "deliver to syncStatCh timeout, dropping status message",
+					"peer-address", from.ShortString(8),
+					"peer-net-addr", stat.NetAddr,
+				)
 			}
 		}(stat)
 
-		return nil
+		return
 	}
 
 	if s.chain.Height() < res.Height {
-		_ = s.Logger.Log("msg", "higher chain height detected, triggering sync", "peer-id", res.ID, "peer-addr", from.String(), "network-height", res.Height)
+		_ = s.logger.Log(
+			"msg", "higher chain height detected, triggering sync",
+			"peer-address", from.ShortString(8),
+			"peer-net-addr", res.NetAddr,
+			"network-height", res.Height,
+		)
 		go s.syncChainLoop(false)
 	}
 
-	return nil
+	return
 }
 
-func (s *Server) processRequestHeaders(from net.Addr, req *RequestHeaders) error {
-	peer, ok := s.peerMap.Get(from.String())
+func (s *Server) processRequestHeaders(from types.Address, req *RequestHeaders) {
+	peer, ok := s.peerMap.Get(from)
 
 	if !ok {
-		return fmt.Errorf("peer (%s) not found", from.String())
+		_ = s.logger.Log("msg", "peer not found", "not_found", from.ShortString(8))
+		return
 	}
 
-	_ = s.Logger.Log("msg", "received headers request", "peer-addr", from.String(), "req-header-from", req.From, "req-header-count", req.Count)
+	_ = s.logger.Log(
+		"msg", "received headers request",
+		"peer-address", from.ShortString(8),
+		"header_from", req.From,
+		"count", req.Count,
+	)
 
 	ourHeight := s.chain.Height()
 	count := req.Count
@@ -1108,21 +1212,13 @@ func (s *Server) processRequestHeaders(from net.Addr, req *RequestHeaders) error
 			block, err := s.chain.GetHeader(i)
 
 			if err != nil {
-				_ = s.Logger.Log("error", "failed to get block for sync response", "height", i, "err", err)
-				return err
+				_ = s.logger.Log("error", "failed to get block for sync response", "height", i, "err", err)
+				return
 			}
 
 			headersToSend = append(headersToSend, block)
 		}
 	}
-
-	//_ = s.Logger.Log(
-	//	"msg", "sending headers to peer",
-	//	"to", from,
-	//	"count", len(headersToSend),
-	//	"from_height", req.From,
-	//	"to_height", endHeight,
-	//)
 
 	buf := new(bytes.Buffer)
 	res := &ResponseHeaders{
@@ -1130,23 +1226,26 @@ func (s *Server) processRequestHeaders(from net.Addr, req *RequestHeaders) error
 	}
 
 	if err := gob.NewEncoder(buf).Encode(res); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
-		return err
+		_ = s.logger.Log("msg", "message encode error", "error", err)
+		return
 	}
 
 	msg := NewMessage(MessageTypeResHeaders, buf.Bytes())
 
-	return peer.Send(msg.Bytes())
+	go s.send(peer, msg.Bytes())
+
+	return
 }
 
-func (s *Server) processResponseHeaders(from net.Addr, res *ResponseHeaders) error {
+func (s *Server) processResponseHeaders(from types.Address, res *ResponseHeaders) {
 	if len(res.Headers) == 0 {
-		return nil
+		return
 	}
 
-	_ = s.Logger.Log(
+	_ = s.logger.Log(
 		"msg", "validating received header chain",
-		"peer-addr", from.String(),
+		"peer-address", from.ShortString(8),
+		"header-from", res.Headers[0].Height,
 		"count", len(res.Headers),
 	)
 
@@ -1163,21 +1262,21 @@ func (s *Server) processResponseHeaders(from net.Addr, res *ResponseHeaders) err
 
 	// Reorg
 	if forkPointFound {
-		_ = s.Logger.Log("msg", "fork point detected", "height", forkPoint)
+		_ = s.logger.Log("msg", "fork point detected", "height", forkPoint)
 
 		if err := s.chain.Rollback(forkPoint); err != nil {
-			return err
+			return
 		}
 
 		if s.isOnline() {
 			go s.syncChainLoop(false)
-			return nil
+			return
 		}
 
 		if s.isSyncing() {
 			select {
 			case s.syncQuitCh <- struct{}{}:
-				_ = s.Logger.Log("msg", "fork detected during sync, cancelling current sync")
+				_ = s.logger.Log("msg", "fork detected during sync, cancelling current sync")
 			default:
 			}
 
@@ -1201,20 +1300,26 @@ func (s *Server) processResponseHeaders(from net.Addr, res *ResponseHeaders) err
 	}
 
 	if forkPoint == 0 {
-		return fmt.Errorf("could not find fork point with peer")
+		_ = s.logger.Log("msg", "could not find fork point with peer")
 	}
 
-	return nil
+	return
 }
 
-func (s *Server) processRequestBlocks(from net.Addr, req *RequestBlocks) error {
-	peer, ok := s.peerMap.Get(from.String())
+func (s *Server) processRequestBlocks(from types.Address, req *RequestBlocks) {
+	peer, ok := s.peerMap.Get(from)
 
 	if !ok {
-		return fmt.Errorf("peer (%s) not found", from.String())
+		_ = s.logger.Log("msg", "peer not found", "not_found", from.String())
+		return
 	}
 
-	_ = s.Logger.Log("msg", "received block request", "peer-addr", from.String(), "req_block_from", req.From, "req_block_count", req.Count)
+	_ = s.logger.Log(
+		"msg", "received block request",
+		"peer-address", from.ShortString(8),
+		"block-from", req.From,
+		"count", req.Count,
+	)
 
 	ourHeight := s.chain.Height()
 	count := req.Count
@@ -1236,21 +1341,13 @@ func (s *Server) processRequestBlocks(from net.Addr, req *RequestBlocks) error {
 			block, err := s.chain.GetBlock(i)
 
 			if err != nil {
-				_ = s.Logger.Log("error", "failed to get block for sync response", "height", i, "err", err)
-				return err
+				_ = s.logger.Log("error", "failed to get block for sync response", "height", i, "err", err)
+				return
 			}
 
 			blocksToSend = append(blocksToSend, block)
 		}
 	}
-
-	//_ = s.Logger.Log(
-	//	"msg", "sending blocks to peer",
-	//	"to", from,
-	//	"count", len(blocksToSend),
-	//	"from_height", req.From,
-	//	"to_height", endHeight,
-	//)
 
 	buf := new(bytes.Buffer)
 	res := &ResponseBlocks{
@@ -1258,44 +1355,120 @@ func (s *Server) processRequestBlocks(from net.Addr, req *RequestBlocks) error {
 	}
 
 	if err := gob.NewEncoder(buf).Encode(res); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
-		return err
+		_ = s.logger.Log("msg", "response blocks message encode error", "error", err)
+		return
 	}
 
 	msg := NewMessage(MessageTypeResBlocks, buf.Bytes())
+	go s.send(peer, msg.Bytes())
 
-	return peer.Send(msg.Bytes())
+	return
 }
 
-func (s *Server) processResponseBlocks(from net.Addr, res *ResponseBlocks) error {
+func (s *Server) processResponseBlocks(from types.Address, res *ResponseBlocks) {
 	if len(res.Blocks) == 0 {
-		return nil
+		return
 	}
 
-	_ = s.Logger.Log(
+	_ = s.logger.Log(
 		"msg", "received blocks from peer",
-		"peer-addr", from.String(),
+		"peer-address", from.ShortString(8),
 		"count", len(res.Blocks),
 		"start_height", res.Blocks[0].Height,
 	)
 
 	for _, block := range res.Blocks {
-		if err := s.processBlock(from, block); err != nil {
-			switch {
-			case errors.Is(err, core.ErrBlockKnown):
-				return nil
-			case errors.Is(err, core.ErrFutureBlock):
-				return nil
-			case errors.Is(err, core.ErrUnknownParent):
-				return nil
-			default:
-				_ = s.Logger.Log("msg", "process-block-error", "recv-height", block.Height, "error", err)
-				return err
+		s.processBlock(from, block)
+	}
+
+	return
+}
+
+func (s *Server) processPrePrepareMessage(from types.Address, msg *PrePrepareMessage) {
+	if s.validator != nil && s.isOnline() {
+		height := msg.Block.Height
+		//_ = s.logger.Log(
+		//	"msg", "received pre-prepare message",
+		//	"from", from.ShortString(8),
+		//	"height", height,
+		//)
+
+		if s.consensusEngines.Exists(height) {
+			return
+		}
+
+		s.validatorSet.Clear()
+
+		newValidators, err := s.dns.ValidatorSet()
+
+		if err != nil {
+			_ = s.logger.Log("msg", "failed to get validator set", "err", err)
+		}
+
+		for _, v := range newValidators {
+			validatorAddress, err := types.AddressFromHexString(v.Address)
+
+			if err != nil {
+				continue
+			}
+
+			s.validatorSet.Put(validatorAddress)
+		}
+
+		_ = s.logger.Log("msg", "validator set updated", "target-height", height, "count", len(newValidators))
+
+		engine := NewDefaultPBFTConsensusEngine(s.broadcaster, s.processor, s.validator, s.validatorSet.Values())
+		s.consensusEngines.Put(height, engine)
+
+		if _, ok := s.peerMap.Get(from); ok {
+			if err = engine.HandleMessage(from, msg); err != nil {
+				if errors.Is(err, core.ErrFutureBlock) || errors.Is(err, core.ErrUnknownParent) {
+					go s.syncChainLoop(false)
+					return
+				} else {
+					_ = s.logger.Log("msg", "failed to handle pre-prepare message", "err", err)
+				}
 			}
 		}
 	}
+}
 
-	return nil
+func (s *Server) processPrepareMessage(from types.Address, msg *PrepareMessage) {
+	if s.validator != nil && s.isOnline() {
+		height := msg.Height
+		// _ = s.logger.Log("event", "received_prepare", "from", from.ShortString(8), "height", height)
+
+		engine, ok := s.consensusEngines.Get(height)
+		if !ok {
+			_ = s.logger.Log("error", "no consensus engine found for height", "height", height)
+			return
+		}
+
+		if _, ok = s.peerMap.Get(from); ok {
+			if err := engine.HandleMessage(from, msg); err != nil {
+				_ = s.logger.Log("error", "prepare_handle_failed", "err", err)
+			}
+		}
+	}
+}
+
+func (s *Server) processCommitMessage(from types.Address, msg *CommitMessage) {
+	if s.validator != nil && s.isOnline() {
+		height := msg.Height
+		// _ = s.logger.Log("event", "received_commit", "from", from.ShortString(8), "height", height)
+
+		engine, ok := s.consensusEngines.Get(height)
+		if !ok {
+			_ = s.logger.Log("error", "no consensus engine found for height", "height", height)
+			return
+		}
+
+		if _, ok = s.peerMap.Get(from); ok {
+			if err := engine.HandleMessage(from, msg); err != nil {
+				_ = s.logger.Log("error", "commit_handle_failed", "err", err)
+			}
+		}
+	}
 }
 
 func (s *Server) requestStatus(peer Peer) error {
@@ -1303,47 +1476,41 @@ func (s *Server) requestStatus(peer Peer) error {
 	buf := new(bytes.Buffer)
 
 	if err := gob.NewEncoder(buf).Encode(req); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
+		_ = s.logger.Log("msg", "message encode error", "error", err)
 		return err
 	}
 
 	msg := NewMessage(MessageTypeReqStatus, buf.Bytes())
-
-	if err := peer.Send(msg.Bytes()); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
-		return err
-	}
+	s.send(peer, msg.Bytes())
 
 	return nil
 }
 
-func (s *Server) responseStatus(peer Peer) error {
+func (s *Server) responseStatus(peer Peer) {
 	buf := new(bytes.Buffer)
 	height := s.chain.Height()
 	genesis, _ := s.chain.GetHeader(0)
 	current, _ := s.chain.GetHeader(height)
 	stat := &ResponseStatus{
-		ID:               s.ID,
+		Address:          s.address,
+		NetAddr:          s.listenAddr,
 		Version:          s.chain.Version(),
 		Height:           height,
-		Status:           s.status,
+		Status:           s.status.Get(),
 		GenesisBlockHash: core.BlockHasher{}.Hash(genesis),
 		CurrentBlockHash: core.BlockHasher{}.Hash(current),
 	}
 
 	if err := gob.NewEncoder(buf).Encode(stat); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
-		return err
+		_ = s.logger.Log("msg", "message encode error", "error", err)
+		return
 	}
 
 	msg := NewMessage(MessageTypeResStatus, buf.Bytes())
 
-	if err := peer.Send(msg.Bytes()); err != nil {
-		_ = s.Logger.Log("msg", "request status message send error. shutting down peer", "addr", peer.Addr())
-		return err
-	}
+	go s.send(peer, msg.Bytes())
 
-	return nil
+	return
 }
 
 func (s *Server) requestHeaders(peer Peer, from uint64, count uint64) error {
@@ -1360,16 +1527,13 @@ func (s *Server) requestHeaders(peer Peer, from uint64, count uint64) error {
 	}
 
 	if err := gob.NewEncoder(buf).Encode(req); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
+		_ = s.logger.Log("msg", "message encode error", "error", err)
 		return err
 	}
 
 	msg := NewMessage(MessageTypeReqHeaders, buf.Bytes())
 
-	if err := peer.Send(msg.Bytes()); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
-		return err
-	}
+	go s.send(peer, msg.Bytes())
 
 	return nil
 }
@@ -1388,16 +1552,12 @@ func (s *Server) requestBlocks(peer Peer, from uint64, count uint64) error {
 	}
 
 	if err := gob.NewEncoder(buf).Encode(req); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
+		_ = s.logger.Log("msg", "message encode error", "error", err)
 		return err
 	}
 
 	msg := NewMessage(MessageTypeReqBlocks, buf.Bytes())
-
-	if err := peer.Send(msg.Bytes()); err != nil {
-		_ = s.Logger.Log("msg", "message encode error", "error", err)
-		return err
-	}
+	s.send(peer, msg.Bytes())
 
 	return nil
 }

@@ -34,7 +34,7 @@ type Block struct {
 	*Header
 
 	Transactions []*Transaction
-	Validator    crypto.PublicKey
+	Proposer     crypto.PublicKey
 	Signature    crypto.Signature
 
 	BlockHash types.Hash
@@ -80,7 +80,7 @@ func (b *Block) Debug(blockVerbose bool, txxVerbose bool) {
 			"weight", b.Header.Weight,
 			"prevBlockHash", b.Header.PrevBlockHash.String(),
 			"timestamp", b.Header.Timestamp,
-			"validator", b.Validator.Address().String(),
+			"validator", b.Proposer.Address().String(),
 			"signature", b.Signature.String(),
 		)
 	} else {
@@ -104,14 +104,14 @@ func (b *Block) AddTransaction(tx *Transaction) {
 	b.Transactions = append(b.Transactions, tx)
 }
 
-func (b *Block) Sign(prevKey crypto.PrivateKey) error {
-	sig, err := prevKey.Sign(b.Bytes())
+func (b *Block) Sign(privKey crypto.PrivateKey) error {
+	sig, err := privKey.Sign(b.Bytes())
 
 	if err != nil {
 		return err
 	}
 
-	b.Validator = prevKey.PublicKey()
+	b.Proposer = privKey.PublicKey()
 	b.Signature = sig
 
 	return nil
@@ -122,7 +122,7 @@ func (b *Block) Verify() error {
 		return fmt.Errorf("block has no signature")
 	}
 
-	if !b.Signature.Verify(b.Validator, b.Header.Bytes()) {
+	if !b.Signature.Verify(b.Proposer, b.Header.Bytes()) {
 		return fmt.Errorf("invalid block signature")
 	}
 
@@ -178,7 +178,7 @@ func CalculateMerkleRoot(txx []*Transaction) (types.Hash, error) {
 		txHashA := txx[i].Hash(TxHasher{})
 		txHashB := txx[j].Hash(TxHasher{})
 
-		return bytes.Compare(txHashA.Bytes(), txHashB.Bytes()) < 0
+		return bytes.Compare(txHashA.ToSlice(), txHashB.ToSlice()) < 0
 	})
 
 	var hashes []types.Hash
@@ -197,7 +197,7 @@ func CalculateMerkleRoot(txx []*Transaction) (types.Hash, error) {
 			left := hashes[i]
 			right := hashes[i+1]
 
-			combinedHashData := append(left.Bytes(), right.Bytes()...)
+			combinedHashData := append(left.ToSlice(), right.ToSlice()...)
 			parentHash := types.Hash(sha256.Sum256(combinedHashData))
 
 			nextLevelHashes = append(nextLevelHashes, parentHash)

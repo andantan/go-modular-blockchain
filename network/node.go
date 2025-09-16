@@ -2,65 +2,76 @@ package network
 
 import (
 	"errors"
+	"fmt"
 	"github.com/andantan/go-modular-blockchain/config"
+	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/types"
 	"github.com/go-kit/log"
 	"net"
+	"time"
 )
 
 type Node interface {
 	Listen() error
 	Connect(addr string) error
+	ConsumePeer() (chan Peer, chan Peer)
+	ConsumeMessage() chan RawMessage
 	Remove(peer Peer)
 	Stop() error
 }
 
 type TCPNode struct {
-	Logger log.Logger
+	logger log.Logger
 
-	ID         string
-	ListenAddr string
-	Listener   net.Listener
+	listenAddr string
+	listener   net.Listener
+	domain     string
 
-	MessageCh  chan RawMessage
-	NewPeerCh  chan Peer
-	DelPeerCh  chan Peer
-	KnownPeers *types.SyncMap[string, struct{}]
+	privKey crypto.PrivateKey
+	pubKey  crypto.PublicKey
+	address types.Address
+
+	messageCh  chan RawMessage
+	newPeerCh  chan Peer
+	delPeerCh  chan Peer
+	quitCh     chan struct{}
+	knownPeers *types.SyncMap[types.Address, struct{}]
 }
 
-func NewTCPNode(
-	id string,
-	addr string,
-	msgCh chan RawMessage,
-	newPeerCh chan Peer,
-	delPeerCh chan Peer,
-) *TCPNode {
-	return &TCPNode{
-		Logger:     config.LoggerWithPrefixes("node", "id", id, "listen-addr", addr),
-		ID:         id,
-		ListenAddr: addr,
-		MessageCh:  msgCh,
-		NewPeerCh:  newPeerCh,
-		DelPeerCh:  delPeerCh,
-		KnownPeers: types.NewSyncMap[string, struct{}](),
+func NewTCPNode(privKey crypto.PrivateKey, listenAddr string, domain string, quitCh chan struct{}) *TCPNode {
+	t := &TCPNode{
+		listenAddr: listenAddr,
+		domain:     domain,
+		privKey:    privKey,
+		pubKey:     privKey.PublicKey(),
+		address:    privKey.PublicKey().Address(),
+		messageCh:  make(chan RawMessage),
+		newPeerCh:  make(chan Peer),
+		delPeerCh:  make(chan Peer),
+		quitCh:     quitCh,
+		knownPeers: types.NewSyncMap[types.Address, struct{}](),
 	}
+
+	t.logger = config.LoggerWithPrefixes("node", "address", t.address.ShortString(8), "listen-addr", t.listenAddr, "domain", domain)
+
+	return t
 }
 
 func (t *TCPNode) WithLogger(logger log.Logger) *TCPNode {
-	t.Logger = logger
+	t.logger = logger
 
 	return t
 }
 
 func (t *TCPNode) Listen() error {
-	ln, err := net.Listen("tcp", t.ListenAddr)
-	_ = t.Logger.Log("event", "TCP_listening")
+	ln, err := net.Listen("tcp", t.listenAddr)
 
 	if err != nil {
 		return err
 	}
+	_ = t.logger.Log("event", "TCP_listening", "")
 
-	t.Listener = ln
+	t.listener = ln
 
 	go t.acceptLoop()
 
@@ -68,27 +79,47 @@ func (t *TCPNode) Listen() error {
 }
 
 func (t *TCPNode) acceptLoop() {
-	_ = t.Logger.Log("event", "accepting_TCP_connection")
+	defer close(t.newPeerCh)
+	defer close(t.delPeerCh)
+	defer close(t.messageCh)
 
-	for {
-		conn, err := t.Listener.Accept()
+	_ = t.logger.Log("event", "accept_loop_started")
 
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				_ = t.Logger.Log("event", "closed_listener", "peer", conn.RemoteAddr().String())
+	acceptCh := make(chan net.Conn)
+	errCh := make(chan error, 1)
+
+	go func() {
+		for {
+			conn, err := t.listener.Accept()
+			if err != nil {
+				errCh <- err
 				return
 			}
-
-			_ = t.Logger.Log("event", "accept_error", "error", err)
-			continue
+			acceptCh <- conn
 		}
+	}()
 
-		go t.handshakeAndValidate(conn)
+	for {
+		select {
+		case conn := <-acceptCh:
+			go t.handshakeAndValidate(conn)
+
+		case err := <-errCh:
+			if errors.Is(err, net.ErrClosed) {
+				_ = t.logger.Log("msg", "accept loop terminated due to closed listener")
+				return
+			}
+			_ = t.logger.Log("error", "accept error", "err", err)
+
+		case <-t.quitCh:
+			_ = t.logger.Log("msg", "server shutdown signal received, terminating accept loop")
+			return
+		}
 	}
 }
 
 func (t *TCPNode) Connect(addr string) error {
-	_ = t.Logger.Log("event", "attempting_connect", "to", addr)
+	_ = t.logger.Log("event", "attempting_connect", "to", addr)
 
 	conn, err := net.Dial("tcp", addr)
 
@@ -101,36 +132,64 @@ func (t *TCPNode) Connect(addr string) error {
 	return nil
 }
 
+func (t *TCPNode) ConsumePeer() (chan Peer, chan Peer) {
+	return t.newPeerCh, t.delPeerCh
+}
+
+func (t *TCPNode) ConsumeMessage() chan RawMessage {
+	return t.messageCh
+}
+
 func (t *TCPNode) Remove(peer Peer) {
-	t.KnownPeers.Remove(peer.ID())
+	info := peer.Identity()
+	t.knownPeers.Remove(info.Address)
 }
 
 func (t *TCPNode) Stop() error {
-	_ = t.Logger.Log("event", "shutdown")
+	_ = t.logger.Log("event", "shutdown")
 
-	return t.Listener.Close()
+	return t.listener.Close()
 }
 
 func (t *TCPNode) handshakeAndValidate(conn net.Conn) {
-	peer := NewTCPPeer(conn, t.MessageCh, t.DelPeerCh)
-	remoteID, err := peer.handshake(t.ID)
+	ourIdentity := &PeerIdentity{
+		Address:       t.address,
+		NetAddr:       t.listenAddr,
+		Domain:        t.domain,
+		ConnectedTime: time.Now().UnixNano(),
+		PublicKey:     t.pubKey,
+		IsValidator:   false,
+	}
 
-	if err != nil {
-		_ = t.Logger.Log("event", "handshake_fail", "error", err)
+	if err := ourIdentity.Sign(t.privKey); err != nil {
+		_ = conn.Close()
+		fmt.Printf("failed to sign our identity: %v\n", err)
 		return
 	}
 
-	if !t.KnownPeers.PutIfNotExists(remoteID, struct{}{}) {
+	if err := ourIdentity.Verify(); err != nil {
+		_ = conn.Close()
+		fmt.Printf("failed to verify our identity: %v\n", err)
+		return
+	}
+
+	peer := NewTCPPeer(conn, t.messageCh, t.delPeerCh)
+	remoteIdentity, err := peer.handshake(ourIdentity)
+
+	if err != nil {
+		_ = t.logger.Log("event", "handshake_fail", "error", err)
+		return
+	}
+
+	if !t.knownPeers.PutIfNotExists(remoteIdentity.Address, struct{}{}) {
 		// tie-breaking
-		isInbound := conn.LocalAddr() == t.Listener.Addr()
-		if isInbound && t.ID > remoteID {
-			_ = t.Logger.Log("msg", "tie-breaking: dropping inbound from lower ID peer")
-			_ = peer.Conn.Close()
+		isInbound := conn.LocalAddr() == t.listener.Addr()
+		if isInbound && t.address.String() > remoteIdentity.Address.String() {
+			_ = t.logger.Log("msg", "tie-breaking: dropping inbound from lower ID peer")
+			_ = peer.conn.Close()
 		}
 		return
 	}
 
-	_ = t.Logger.Log("msg", "new peer connection sending to channel", "peer-id", remoteID, "peer-addr", peer.Addr())
-
-	t.NewPeerCh <- peer
+	t.newPeerCh <- peer
 }

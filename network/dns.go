@@ -6,50 +6,49 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
-	"sync"
 )
 
 type PeerStatus struct {
-	ID             string `json:"id"`
-	Addr           string `json:"addr"`
+	Address        string `json:"address"`
+	NetAddr        string `json:"net_addr"`
+	Domain         string `json:"domain"`
 	Connections    uint8  `json:"connections"`
 	MaxConnections uint8  `json:"max_connections"`
 	Height         uint64 `json:"height"`
-	Validator      bool   `json:"validator"`
-	Proposer       bool   `json:"proposer"`
+	IsValidator    bool   `json:"is_validator"`
 }
 
 type PeerDNS interface {
-	Register(*PeerStatus, *sync.WaitGroup) error
-	DiscoverPeers(*PeerStatus, int) ([]PeerStatus, error)
+	Register(*PeerStatus) error
+	DiscoverPeers() ([]PeerStatus, error)
+	ValidatorSet() ([]PeerStatus, error)
 	Heartbeat(*PeerStatus) error
 	Deregister(*PeerStatus) error
 }
 
-type PeerDiscoveryResponse struct {
+type PeerSliceResponse struct {
 	Peers []PeerStatus `json:"peers"`
 }
 
 type DefaultPeerDNS struct {
 	dnsServerAddr string
+	dnsUri        string
 }
 
 func NewDefaultPeerDNS(dnsServerAddr string) *DefaultPeerDNS {
 	return &DefaultPeerDNS{
 		dnsServerAddr: dnsServerAddr,
+		dnsUri:        fmt.Sprintf("http://%s", dnsServerAddr),
 	}
 }
 
-func (dns *DefaultPeerDNS) Register(stat *PeerStatus, wg *sync.WaitGroup) error {
-	defer wg.Done()
-
-	url := fmt.Sprintf("http://%s/register", dns.dnsServerAddr)
-	body, err := json.Marshal(stat)
+func (dns *DefaultPeerDNS) Register(ourStatus *PeerStatus) error {
+	body, err := json.Marshal(ourStatus)
 	if err != nil {
 		return err
 	}
 
+	url := dns.dnsUri + "/register"
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -65,24 +64,13 @@ func (dns *DefaultPeerDNS) Register(stat *PeerStatus, wg *sync.WaitGroup) error 
 	return nil
 }
 
-func (dns *DefaultPeerDNS) DiscoverPeers(stat *PeerStatus, count int) ([]PeerStatus, error) {
-	url := fmt.Sprintf("http://%s/peers", dns.dnsServerAddr)
-
-	req, err := http.NewRequest("GET", url, nil)
+func (dns *DefaultPeerDNS) DiscoverPeers() ([]PeerStatus, error) {
+	url := dns.dnsUri + "/peers"
+	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
 	}
 
-	q := req.URL.Query()
-	q.Add("count", strconv.Itoa(count))
-	q.Add("id", stat.ID)
-	q.Add("addr", stat.Addr)
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
@@ -91,7 +79,7 @@ func (dns *DefaultPeerDNS) DiscoverPeers(stat *PeerStatus, count int) ([]PeerSta
 		return nil, fmt.Errorf("discover failed with status: %s", resp.Status)
 	}
 
-	var discoveryResp PeerDiscoveryResponse
+	var discoveryResp PeerSliceResponse
 
 	if err = json.NewDecoder(resp.Body).Decode(&discoveryResp); err != nil {
 		return nil, err
@@ -100,9 +88,32 @@ func (dns *DefaultPeerDNS) DiscoverPeers(stat *PeerStatus, count int) ([]PeerSta
 	return discoveryResp.Peers, nil
 }
 
-func (dns *DefaultPeerDNS) Heartbeat(stat *PeerStatus) error {
-	url := fmt.Sprintf("http://%s/heartbeat", dns.dnsServerAddr)
-	body, err := json.Marshal(stat)
+func (dns *DefaultPeerDNS) ValidatorSet() ([]PeerStatus, error) {
+	url := dns.dnsUri + "/validators"
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("discover failed with status: %s", resp.Status)
+	}
+
+	var validatorsRes PeerSliceResponse
+	if err = json.NewDecoder(resp.Body).Decode(&validatorsRes); err != nil {
+		return nil, err
+	}
+
+	return validatorsRes.Peers, nil
+}
+
+func (dns *DefaultPeerDNS) Heartbeat(ourStatus *PeerStatus) error {
+	url := dns.dnsUri + "/heartbeat"
+	body, err := json.Marshal(ourStatus)
 	if err != nil {
 		return err
 	}
@@ -122,9 +133,9 @@ func (dns *DefaultPeerDNS) Heartbeat(stat *PeerStatus) error {
 	return nil
 }
 
-func (dns *DefaultPeerDNS) Deregister(stat *PeerStatus) error {
-	url := fmt.Sprintf("http://%s/deregister", dns.dnsServerAddr)
-	body, err := json.Marshal(stat)
+func (dns *DefaultPeerDNS) Deregister(ourStatus *PeerStatus) error {
+	url := dns.dnsUri + "/deregister"
+	body, err := json.Marshal(ourStatus)
 	if err != nil {
 		return err
 	}

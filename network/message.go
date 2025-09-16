@@ -6,7 +6,6 @@ import (
 	"github.com/andantan/go-modular-blockchain/core"
 	"github.com/andantan/go-modular-blockchain/types"
 	"io"
-	"net"
 )
 
 type MessageType byte
@@ -20,6 +19,9 @@ const (
 	MessageTypeResHeaders
 	MessageTypeReqBlocks
 	MessageTypeResBlocks
+	MessageTypePrePrepare
+	MessageTypePrepare
+	MessageTypeCommit
 )
 
 func (mt MessageType) String() string {
@@ -40,13 +42,19 @@ func (mt MessageType) String() string {
 		return "ReqBlocks"
 	case MessageTypeResBlocks:
 		return "ResBlocks"
+	case MessageTypePrePrepare:
+		return "PrePrepare"
+	case MessageTypePrepare:
+		return "Prepare"
+	case MessageTypeCommit:
+		return "Commit"
 	default:
 		return "Unknown"
 	}
 }
 
 type RawMessage struct {
-	From    net.Addr
+	From    types.Address
 	Payload io.Reader
 }
 
@@ -70,20 +78,21 @@ func (m *Message) Bytes() []byte {
 }
 
 type DecodedMessage struct {
-	From net.Addr
+	From types.Address
 	Data any
 }
 
 type RawMessageDecodeFunc func(RawMessage) (*DecodedMessage, error)
-type MessageProcessFunc func(*DecodedMessage) error
+type MessageProcessFunc func(*DecodedMessage)
 
 type RequestStatus struct{}
 
 type ResponseStatus struct {
-	ID               string
+	Address          types.Address
+	NetAddr          string
 	Version          uint16
 	Height           uint64
-	Status           BlockchainStatusType
+	Status           ServerStatusType
 	GenesisBlockHash types.Hash
 	CurrentBlockHash types.Hash
 }

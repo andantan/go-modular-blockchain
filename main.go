@@ -5,56 +5,64 @@ import (
 	"fmt"
 	"github.com/andantan/go-modular-blockchain/crypto"
 	"github.com/andantan/go-modular-blockchain/network"
+	"log"
+	"strings"
 	"time"
 )
 
 func main() {
-	port := flag.String("port", "4000", "the port for the server to listen on")
-	id := flag.String("id", "DEFAULT", "server identifier to use")
-	blockDirName := flag.String("block-dir-name", "", "directory to store blocks (not path) in")
-	flood := flag.Bool("flood", false, "enable flooding mode")
-	proposer := flag.Bool("proposer", false, "enable validating the blockchain")
-	tester := flag.Bool("tester", false, "whether to run the tester")
+	var port string
+	flag.StringVar(&port, "p", "4000", "port for the server")
+	flag.StringVar(&port, "port", "4000", "port for the server")
+
+	var domain string
+	flag.StringVar(&domain, "d", "", "domain name")
+	flag.StringVar(&domain, "domain", "", "domain name")
+
+	var isValidator bool
+	flag.BoolVar(&isValidator, "validator", false, "enable validating")
+
+	var isProposer bool
+	flag.BoolVar(&isProposer, "proposer", false, "enable proposing")
+
+	var isTester bool
+	flag.BoolVar(&isTester, "tester", false, "run the tester")
 
 	flag.Parse()
 
-	listenAddr := fmt.Sprintf("127.0.0.1:%s", *port)
-	storeDir := fmt.Sprintf("%s_%s", *blockDirName, *id)
+	if strings.Trim(domain, " ") == "" {
+		panic("domain name must not be empty")
+	}
+
+	listenAddr := fmt.Sprintf("127.0.0.1:%s", port)
 	params := network.NewChainParameter(30*time.Second, 2<<10)
 
-	opts := network.NewServerOpts(*id, listenAddr)
-	opts = opts.WithBlockDir(storeDir)
+	opts := network.NewServerOpts(listenAddr, domain)
 	opts = opts.WithDNS(network.NewDefaultPeerDNS("127.0.0.1:6550"))
 	opts = opts.WithFlooding()
 
-	if *tester {
+	if isTester {
 		opts = opts.WithTester()
 	}
 
-	if *flood {
-		opts = opts.WithFlooding()
-	}
-
-	s, err := network.NewServer(*opts, *params)
+	privKey, err := crypto.GeneratePrivateKey()
 
 	if err != nil {
 		panic(err)
 	}
 
-	if *proposer {
-		privKey, err := crypto.GeneratePrivateKey()
+	s, err := network.NewServer(*opts, *params, privKey)
 
-		if err != nil {
-			panic(err)
-		}
+	if err != nil {
+		panic(err)
+	}
 
-		if _, err := s.UpgradeToProposer(privKey); err != nil {
-			panic(err)
-		}
+	if isValidator {
+		s = s.UpgradeToValidator(isProposer)
 	}
 
 	go func() {
-		_ = s.Start()
+		log.Fatal(s.Start())
 	}()
 
 	select {}
@@ -66,4 +74,6 @@ func main() {
 	//s.Shutdown(wg)
 	//
 	//wg.Wait()
+	//
+	//<-time.After(time.Minute)
 }

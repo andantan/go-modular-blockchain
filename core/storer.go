@@ -93,7 +93,7 @@ func (fs *DefaultBlockStorer) StoreBlock(block *Block) error {
 	}
 
 	blockHash := block.Hash(BlockHasher{})
-	fileName := hex.EncodeToString(blockHash.Bytes())
+	fileName := hex.EncodeToString(blockHash.ToSlice())
 	filePath := filepath.Join(fs.blocksDir, fileName)
 
 	fs.ioLock.Lock()
@@ -111,7 +111,7 @@ func (fs *DefaultBlockStorer) StoreBlock(block *Block) error {
 }
 
 func (fs *DefaultBlockStorer) GetBlockByHash(hash types.Hash) (*Block, error) {
-	fileName := hex.EncodeToString(hash.Bytes())
+	fileName := hex.EncodeToString(hash.ToSlice())
 	filePath := filepath.Join(fs.blocksDir, fileName)
 
 	fs.ioLock.RLock()
@@ -156,7 +156,7 @@ func (fs *DefaultBlockStorer) RemoveBlock(hash types.Hash) error {
 	fs.ioLock.Lock()
 	defer fs.ioLock.Unlock()
 
-	fileName := hex.EncodeToString(hash.Bytes())
+	fileName := hex.EncodeToString(hash.ToSlice())
 	filePath := filepath.Join(fs.blocksDir, fileName)
 	err := os.Remove(filePath)
 

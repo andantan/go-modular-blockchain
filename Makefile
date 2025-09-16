@@ -5,19 +5,30 @@ else
 endif
 
 
-# Default Port number
 PORT ?= 4000
-SEEDS ?=
-BLOCK_DIR_NAME ?= blocks
-FLOOD ?= false
+DOMAIN ?=
+VALIDATOR ?= false
 PROPOSER ?= false
-ID ?=
 TESTER ?= false
+
+ARGS = --port=$(PORT) --domain=$(DOMAIN)
+
+ifeq ($(VALIDATOR), true)
+    ARGS += --validator
+endif
+
+ifeq ($(PROPOSER), true)
+	ARGS += --proposer
+endif
+
+ifeq ($(TESTER), true)
+    ARGS += --tester
+endif
 
 build:
 	@go build -o ./bin/blockchain
 
 run: build
 	@$(CLEAR_COMMAND)
-	./bin/blockchain --port=$(PORT) --id=$(ID) --tester=$(TESTER) --block-dir-name=$(BLOCK_DIR_NAME) --flood=$(FLOOD) --proposer=$(PROPOSER)
+	./bin/blockchain $(ARGS)
 
